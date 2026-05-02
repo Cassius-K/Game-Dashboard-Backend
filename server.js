@@ -62,14 +62,12 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
     const apiKey = process.env.STEAM_API_KEY;
 
     try {
-        // 1. Sync Profile Info
+        // 1. Sync Profile
         const profileUrl = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${apiKey}&steamids=${steamid}`;
         const profileRes = await axios.get(profileUrl);
-        
         if (!profileRes.data?.response?.players?.length) {
-            return res.status(404).json({ message: "Steam profile not found or is private." });
+            return res.status(404).json({ message: "Profile not found." });
         }
-
         const p = profileRes.data.response.players[0];
         await User.findOneAndUpdate(
             { steamId: steamid },
@@ -77,43 +75,36 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
             { upsert: true }
         );
 
-        // 2. Sync Owned Games (Including Free-to-Play)
-        const gamesUrl = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamid}&include_appinfo=true&include_played_free_games=true`;
+        // 2. Fetch Games with every possible "include" flag
+        const gamesUrl = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamid}&include_appinfo=true&include_played_free_games=true&include_free_sub=true`;
         const gamesRes = await axios.get(gamesUrl);
-        const allGames = gamesRes.data?.response?.games || [];
+        const allGamesFromSteam = gamesRes.data?.response?.games || [];
 
-        if (allGames.length > 0) {
-            // --- FILTERING LOGIC ---
-            const filteredGames = allGames.filter(game => {
-                // RULE 1: Must have a name and an icon (filters out most tools/servers)
-                const hasMetadata = game.name && game.img_icon_url;
-                
-                // RULE 2: Optional - Only sync games with at least 1 minute of playtime
-                // (Uncomment the line below if you want to hide unplayed games)
-                // const hasPlaytime = game.playtime_forever > 0;
+        // 3. Filter out items that are clearly not games (no name or no icon)
+        const validGames = allGamesFromSteam.filter(g => g.name && g.img_icon_url);
 
-                return hasMetadata; // add "&& hasPlaytime" here if you want rule 2
-            });
+        // 4. Update or Insert the valid games
+        const gamePromises = validGames.map(game => {
+            return Game.findOneAndUpdate(
+                { appid: game.appid },
+                { name: game.name, img_icon_url: game.img_icon_url, playtime_forever: game.playtime_forever },
+                { upsert: true }
+            );
+        });
+        await Promise.all(gamePromises);
 
-            const gamePromises = filteredGames.map(game => {
-                return Game.findOneAndUpdate(
-                    { appid: game.appid },
-                    { 
-                        name: game.name, 
-                        img_icon_url: game.img_icon_url, 
-                        playtime_forever: game.playtime_forever 
-                    },
-                    { upsert: true }
-                );
-            });
-            await Promise.all(gamePromises);
-            
-            res.json({ 
-                message: `Success! Synced ${filteredGames.length} valid games. (Skipped ${allGames.length - filteredGames.length} tools/metadata-missing items).` 
-            });
-        } else {
-            res.json({ message: `Profile found, but no games were visible.` });
-        }
+        // 5. THE CLEANUP: Delete "Private" or "Removed" games
+        // Get an array of all AppIDs we just received from Steam
+        const validAppIds = validGames.map(g => g.appid);
+
+        // Delete any game in our MongoDB that was NOT in the list we just got from Steam
+        const deleteResult = await Game.deleteMany({ 
+            appid: { $nin: validAppIds } 
+        });
+
+        res.json({ 
+            message: `Sync Complete! Displaying ${validGames.length} games. Removed ${deleteResult.deletedCount} private/orphaned games.` 
+        });
 
     } catch (error) {
         console.error("SYNC ERROR:", error);
