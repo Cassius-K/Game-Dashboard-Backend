@@ -181,7 +181,9 @@ app.get('/api/games/:steamid', async (req, res) => {
 
         // Since we didn't strictly link Game to User in the schema earlier, 
         // for now we will just return all games (we can fix the schema later to be more robust)
-        const games = await Game.find({}); 
+        // UPDATED: Added .sort({ name: 1 }) to sort results alphabetically (A-Z)
+        const games = await Game.find({}).sort({ name: 1 }); 
+        
         res.json(games);
     } catch (error) {
         res.status(500).json({ error: error.message });
