@@ -79,7 +79,7 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
         );
 
         // 2. Sync Owned Games
-        const gamesUrl = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamid}&include_appinfo=true`;
+		const gamesUrl = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamid}&include_appinfo=true&include_played_free_games=true`;
         const gamesRes = await axios.get(gamesUrl);
         
         // FIX: Use optional chaining and default to an empty array
