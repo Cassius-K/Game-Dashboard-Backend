@@ -232,7 +232,32 @@ app.post('/api/auth/signin', async (req, res) => {
         // Create a token (Use your own secret key from .env later, but this works for now)
         const token = jwt.sign({ id: user._id, username: user.username }, process.env.JWT_SECRET || 'supersecretgigakey', { expiresIn: '1d' });
 
-        res.json({ message: "Login successful", token, username: user.username });
+        res.json({ 
+            message: "Login successful", 
+            token, 
+            username: user.username, 
+            linkedSteamId: user.linkedSteamId
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// 3. Link Steam Account to User
+app.post('/api/auth/link-steam', async (req, res) => {
+    try {
+        const { username, steamId } = req.body;
+        
+        // Find the user and update their linkedSteamId
+        const updatedUser = await SuperUser.findOneAndUpdate(
+            { username: username },
+            { linkedSteamId: steamId },
+            { new: true } // Returns the updated document
+        );
+
+        if (!updatedUser) return res.status(404).json({ message: "User not found" });
+
+        res.json({ message: "Steam account successfully linked!", linkedSteamId: updatedUser.linkedSteamId });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
