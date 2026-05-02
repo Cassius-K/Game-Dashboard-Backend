@@ -16,7 +16,7 @@ SuperUserSchema.pre('save', async function(next) {
 });
 
 // Helper method to check password
-GigaUserSchema.methods.comparePassword = async function(candidatePassword) {
+SuperUserSchema.methods.comparePassword = async function(candidatePassword) {
     return await bcrypt.compare(candidatePassword, this.password);
 };
 
