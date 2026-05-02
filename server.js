@@ -290,6 +290,35 @@ app.get('/api/stats/:steamid', async (req, res) => {
     }
 });
 
+// --- SOCIAL: COMMUNITY LEADERBOARD ---
+app.get('/api/community/leaderboard', async (req, res) => {
+    try {
+        // 1. Find all users who have actually linked a Steam account
+        const users = await SuperUser.find({ linkedSteamId: { $ne: null } }, 'username linkedSteamId');
+
+        // 2. Count unlocked achievements for each user
+        const leaderboardData = await Promise.all(users.map(async (user) => {
+            const unlocked = await Achievement.countDocuments({ 
+                userId: user.linkedSteamId, 
+                achieved: 1 
+            });
+            
+            return {
+                username: user.username,
+                steamId: user.linkedSteamId,
+                unlockedCount: unlocked
+            };
+        }));
+
+        // 3. Sort the array from highest to lowest
+        leaderboardData.sort((a, b) => b.unlockedCount - a.unlockedCount);
+
+        res.json(leaderboardData);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
