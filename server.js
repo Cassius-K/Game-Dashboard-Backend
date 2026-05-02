@@ -6,7 +6,7 @@ const User = require('./models/User');
 const Game = require('./models/Game');
 const Achievement = require('./models/Achievement');
 const jwt = require('jsonwebtoken');
-const GigaUser = require('./models/SuperUser');
+const SuperUser = require('./models/SuperUser');
 
 const app = express();
 app.use(cors());
