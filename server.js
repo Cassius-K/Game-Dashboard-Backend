@@ -325,34 +325,46 @@ app.get('/api/search/players/:query', async (req, res) => {
     const apiKey = process.env.STEAM_API_KEY;
 
     try {
-        // 1. Search our local MongoDB 'User' collection for matching names
-        // We use a "Regex" to find names that START with or CONTAIN the query string
-        const localMatches = await User.find({
-            personaname: { $regex: query, $options: 'i' } // 'i' means case-insensitive
-        }).limit(5);
+        // 1. Sanitize the query for MongoDB Regex (prevents crashes from special characters like ' or [)
+        const safeQuery = query.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 
-        // 2. Try to resolve the query as a Steam Vanity URL (in case it's a custom name)
-        const vanityUrl = `http://api.steampowered.com/ISteamUser/ResolveVanityURL/v0001/?key=${apiKey}&vanityurl=${query}`;
-        const vanityRes = await axios.get(vanityUrl);
-        
+        // 2. Search local MongoDB (Increased limit to 15 to show multiple users with same name)
+        const localMatches = await User.find({
+            personaname: { $regex: safeQuery, $options: 'i' } 
+        }).limit(15);
+
+        // 3. Try to resolve the query as a Steam Vanity URL
         let vanityMatch = null;
-        if (vanityRes.data.response.success === 1) {
-            const steamId = vanityRes.data.response.steamid;
-            // Fetch the profile info for this ID so we can show it in the results
-            const profileUrl = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${apiKey}&steamids=${steamId}`;
-            const profileRes = await axios.get(profileUrl);
-            vanityMatch = profileRes.data.response.players[0];
+        try {
+            // Encode the URI component to safely handle apostrophes in the URL request
+            const encodedQuery = encodeURIComponent(query);
+            const vanityUrl = `http://api.steampowered.com/ISteamUser/ResolveVanityURL/v0001/?key=${apiKey}&vanityurl=${encodedQuery}`;
+            const vanityRes = await axios.get(vanityUrl);
+            
+            if (vanityRes.data.response.success === 1) {
+                const steamId = vanityRes.data.response.steamid;
+                const profileUrl = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${apiKey}&steamids=${steamId}`;
+                const profileRes = await axios.get(profileUrl);
+                vanityMatch = profileRes.data.response.players[0];
+            }
+        } catch (e) {
+            console.log("Vanity URL lookup failed or not found.");
         }
 
-        // 3. Combine results (Remove duplicates if the vanity match is already in local matches)
+        // 4. Combine results and remove duplicates
         let results = [...localMatches];
-        if (vanityMatch && !results.find(r => r.steamId === vanityMatch.steamid)) {
-            results.push({
-                steamId: vanityMatch.steamid,
-                personaname: vanityMatch.personaname,
-                avatar: vanityMatch.avatar,
-                isNew: true // Flag to show it's from Steam, not our DB yet
-            });
+        
+        // If we found a Steam Vanity match, and it's NOT already in our local results, add it to the top
+        if (vanityMatch) {
+            const alreadyInLocal = results.some(r => r.steamId === vanityMatch.steamid);
+            if (!alreadyInLocal) {
+                results.unshift({
+                    steamId: vanityMatch.steamid,
+                    personaname: vanityMatch.personaname,
+                    avatar: vanityMatch.avatar,
+                    isNew: true // Flag to show it's fresh from Steam
+                });
+            }
         }
 
         res.json(results);
