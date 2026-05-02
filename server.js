@@ -67,37 +67,52 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
         const profileRes = await axios.get(profileUrl);
         
         if (!profileRes.data?.response?.players?.length) {
-            return res.status(404).json({ message: "Steam profile not found or is completely private." });
+            return res.status(404).json({ message: "Steam profile not found or is private." });
         }
 
         const p = profileRes.data.response.players[0];
-
         await User.findOneAndUpdate(
             { steamId: steamid },
             { personaname: p.personaname, profileurl: p.profileurl, avatar: p.avatarfull, lastUpdated: Date.now() },
             { upsert: true }
         );
 
-        // 2. Sync Owned Games
-		const gamesUrl = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamid}&include_appinfo=true&include_played_free_games=true`;
+        // 2. Sync Owned Games (Including Free-to-Play)
+        const gamesUrl = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamid}&include_appinfo=true&include_played_free_games=true`;
         const gamesRes = await axios.get(gamesUrl);
-        
-        // FIX: Use optional chaining and default to an empty array
-        const games = gamesRes.data?.response?.games || [];
+        const allGames = gamesRes.data?.response?.games || [];
 
-        if (games.length > 0) {
-            const gamePromises = games.map(game => {
+        if (allGames.length > 0) {
+            // --- FILTERING LOGIC ---
+            const filteredGames = allGames.filter(game => {
+                // RULE 1: Must have a name and an icon (filters out most tools/servers)
+                const hasMetadata = game.name && game.img_icon_url;
+                
+                // RULE 2: Optional - Only sync games with at least 1 minute of playtime
+                // (Uncomment the line below if you want to hide unplayed games)
+                // const hasPlaytime = game.playtime_forever > 0;
+
+                return hasMetadata; // add "&& hasPlaytime" here if you want rule 2
+            });
+
+            const gamePromises = filteredGames.map(game => {
                 return Game.findOneAndUpdate(
                     { appid: game.appid },
-                    { name: game.name, img_icon_url: game.img_icon_url, playtime_forever: game.playtime_forever },
+                    { 
+                        name: game.name, 
+                        img_icon_url: game.img_icon_url, 
+                        playtime_forever: game.playtime_forever 
+                    },
                     { upsert: true }
                 );
             });
             await Promise.all(gamePromises);
-            res.json({ message: `Success! Synced ${games.length} games for ${p.personaname}` });
+            
+            res.json({ 
+                message: `Success! Synced ${filteredGames.length} valid games. (Skipped ${allGames.length - filteredGames.length} tools/metadata-missing items).` 
+            });
         } else {
-            // If the code reaches here, the profile was found but the games list was hidden/empty
-            res.json({ message: `Profile found, but no games were visible. Check your Steam Privacy settings (Game Details must be Public).` });
+            res.json({ message: `Profile found, but no games were visible.` });
         }
 
     } catch (error) {
