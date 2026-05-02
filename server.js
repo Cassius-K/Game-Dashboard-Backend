@@ -5,6 +5,8 @@ const cors = require('cors');
 const User = require('./models/User');
 const Game = require('./models/Game');
 const Achievement = require('./models/Achievement');
+const jwt = require('jsonwebtoken');
+const GigaUser = require('./models/SuperUser');
 
 const app = express();
 app.use(cors());
@@ -195,6 +197,44 @@ app.get('/api/achievements/:steamid/:appid', async (req, res) => {
         res.json(achievements);
     } catch (error) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+// --- AUTHENTICATION ROUTES ---
+
+// 1. Sign Up
+app.post('/api/auth/signup', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+
+        const newUser = new GigaUser({ username, password });
+        await newUser.save();
+        
+        res.status(201).json({ message: "User created successfully! You can now log in." });
+    } catch (error) {
+        if (error.code === 11000) return res.status(409).json({ message: "Username already exists" });
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// 2. Log In
+app.post('/api/auth/signin', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        const user = await SuperUser.findOne({ username });
+        
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        const isMatch = await user.comparePassword(password);
+        if (!isMatch) return res.status(401).json({ message: "Invalid password" });
+
+        // Create a token (Use your own secret key from .env later, but this works for now)
+        const token = jwt.sign({ id: user._id, username: user.username }, process.env.JWT_SECRET || 'supersecretgigakey', { expiresIn: '1d' });
+
+        res.json({ message: "Login successful", token, username: user.username });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
     }
 });
 
