@@ -319,6 +319,48 @@ app.get('/api/community/leaderboard', async (req, res) => {
     }
 });
 
+// --- PLAYER SEARCH (Local DB + Steam Vanity URL) ---
+app.get('/api/search/players/:query', async (req, res) => {
+    const { query } = req.params;
+    const apiKey = process.env.STEAM_API_KEY;
+
+    try {
+        // 1. Search our local MongoDB 'User' collection for matching names
+        // We use a "Regex" to find names that START with or CONTAIN the query string
+        const localMatches = await User.find({
+            personaname: { $regex: query, $options: 'i' } // 'i' means case-insensitive
+        }).limit(5);
+
+        // 2. Try to resolve the query as a Steam Vanity URL (in case it's a custom name)
+        const vanityUrl = `http://api.steampowered.com/ISteamUser/ResolveVanityURL/v0001/?key=${apiKey}&vanityurl=${query}`;
+        const vanityRes = await axios.get(vanityUrl);
+        
+        let vanityMatch = null;
+        if (vanityRes.data.response.success === 1) {
+            const steamId = vanityRes.data.response.steamid;
+            // Fetch the profile info for this ID so we can show it in the results
+            const profileUrl = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${apiKey}&steamids=${steamId}`;
+            const profileRes = await axios.get(profileUrl);
+            vanityMatch = profileRes.data.response.players[0];
+        }
+
+        // 3. Combine results (Remove duplicates if the vanity match is already in local matches)
+        let results = [...localMatches];
+        if (vanityMatch && !results.find(r => r.steamId === vanityMatch.steamid)) {
+            results.push({
+                steamId: vanityMatch.steamid,
+                personaname: vanityMatch.personaname,
+                avatar: vanityMatch.avatar,
+                isNew: true // Flag to show it's from Steam, not our DB yet
+            });
+        }
+
+        res.json(results);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
