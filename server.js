@@ -263,6 +263,33 @@ app.post('/api/auth/link-steam', async (req, res) => {
     }
 });
 
+// --- DASHBOARD STATS ROUTE ---
+app.get('/api/stats/:steamid', async (req, res) => {
+    try {
+        const { steamid } = req.params;
+
+        // 1. Count ALL achievements synced for this user
+        const totalAchievements = await Achievement.countDocuments({ userId: steamid });
+
+        // 2. Count ONLY the unlocked achievements for this user
+        const unlockedAchievements = await Achievement.countDocuments({ userId: steamid, achieved: 1 });
+
+        // 3. Calculate percentage
+        let completionRate = 0;
+        if (totalAchievements > 0) {
+            completionRate = Math.round((unlockedAchievements / totalAchievements) * 100);
+        }
+
+        res.json({
+            total: totalAchievements,
+            unlocked: unlockedAchievements,
+            completionRate: completionRate
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
