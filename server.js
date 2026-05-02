@@ -373,6 +373,37 @@ app.get('/api/search/players/:query', async (req, res) => {
     }
 });
 
+// --- PLAYTIME STATS ROUTE ---
+app.get('/api/stats/playtime/:steamid', async (req, res) => {
+    try {
+        const { steamid } = req.params;
+
+        // Use the MongoDB Aggregation Pipeline to do all the work in the database
+        const result = await Game.aggregate([
+            // Stage 1: Match all games that belong to the user (this is a simplified match for now)
+            // A more advanced version would link Games directly to a User ID
+            // For now, we assume all synced games are for the active user
+            
+            // Stage 2: Group all matched documents and sum their 'playtime_forever' field
+            {
+                $group: {
+                    _id: null, // Group all documents into a single result
+                    totalMinutes: { $sum: '$playtime_forever' }
+                }
+            }
+        ]);
+
+        if (result.length > 0) {
+            const totalHours = Math.round(result[0].totalMinutes / 60);
+            res.json({ totalHours });
+        } else {
+            res.json({ totalHours: 0 }); // If no games are found
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
