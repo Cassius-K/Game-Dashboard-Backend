@@ -60,36 +60,47 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
     const apiKey = process.env.STEAM_API_KEY;
 
     try {
-        // 1. Sync Profile
+        // 1. Sync Profile Info
         const profileUrl = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${apiKey}&steamids=${steamid}`;
         const profileRes = await axios.get(profileUrl);
+        
+        if (!profileRes.data?.response?.players?.length) {
+            return res.status(404).json({ message: "Steam profile not found or is completely private." });
+        }
+
         const p = profileRes.data.response.players[0];
 
         await User.findOneAndUpdate(
             { steamId: steamid },
             { personaname: p.personaname, profileurl: p.profileurl, avatar: p.avatarfull, lastUpdated: Date.now() },
-            { upsert: true } // "Upsert" means: Update if exists, Insert if it doesn't
+            { upsert: true }
         );
 
         // 2. Sync Owned Games
         const gamesUrl = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamid}&include_appinfo=true`;
         const gamesRes = await axios.get(gamesUrl);
-        const games = gamesRes.data.response.games;
+        
+        // FIX: Use optional chaining and default to an empty array
+        const games = gamesRes.data?.response?.games || [];
 
-        // Save games to the database
-        const gamePromises = games.map(game => {
-            return Game.findOneAndUpdate(
-                { appid: game.appid },
-                { name: game.name, img_icon_url: game.img_icon_url, playtime_forever: game.playtime_forever },
-                { upsert: true }
-            );
-        });
-        await Promise.all(gamePromises);
+        if (games.length > 0) {
+            const gamePromises = games.map(game => {
+                return Game.findOneAndUpdate(
+                    { appid: game.appid },
+                    { name: game.name, img_icon_url: game.img_icon_url, playtime_forever: game.playtime_forever },
+                    { upsert: true }
+                );
+            });
+            await Promise.all(gamePromises);
+            res.json({ message: `Success! Synced ${games.length} games for ${p.personaname}` });
+        } else {
+            // If the code reaches here, the profile was found but the games list was hidden/empty
+            res.json({ message: `Profile found, but no games were visible. Check your Steam Privacy settings (Game Details must be Public).` });
+        }
 
-        res.json({ success: true, message: `Synced ${games.length} games for ${p.personaname}` });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: error.message });
+        console.error("SYNC ERROR:", error);
+        res.status(500).json({ message: "Server Error: " + error.message });
     }
 });
 
