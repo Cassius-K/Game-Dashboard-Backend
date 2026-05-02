@@ -104,6 +104,88 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
     }
 });
 
+app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
+    const { steamid, appid } = req.params;
+    const apiKey = process.env.STEAM_API_KEY;
+
+    try {
+        // 1. Get the list of ALL possible achievements for the game
+        const schemaUrl = `http://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?key=${apiKey}&appid=${appid}`;
+        const schemaRes = await axios.get(schemaUrl);
+        const availableAchievements = schemaRes.data?.game?.availableGameStats?.achievements || [];
+
+        if (availableAchievements.length === 0) {
+            return res.json({ message: "This game does not have achievements.", achievements: [] });
+        }
+
+        // 2. Get the USER'S progress on those achievements
+        const userStatsUrl = `http://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v0001/?appid=${appid}&key=${apiKey}&steamid=${steamid}`;
+        let userUnlocked = [];
+        
+        try {
+            const userRes = await axios.get(userStatsUrl);
+            userUnlocked = userRes.data?.playerstats?.achievements || [];
+        } catch (e) {
+            // Steam returns a 400 error if the user has NEVER played the game, 
+            // so we just catch it and leave userUnlocked empty.
+            console.log(`User hasn't played game ${appid} or stats are private.`);
+        }
+
+        // 3. Combine the data so we know the names, icons, AND unlock status
+        const finalAchievements = availableAchievements.map(schemaAch => {
+            // Find if the user unlocked this specific achievement
+            const userAch = userUnlocked.find(u => u.apiname === schemaAch.name);
+            
+            return {
+                apiname: schemaAch.name,
+                displayName: schemaAch.displayName,
+                description: schemaAch.description,
+                iconUrl: userAch?.achieved ? schemaAch.icon : schemaAch.icongray, // Use colored icon if unlocked
+                achieved: userAch ? userAch.achieved : 0,
+                unlocktime: userAch ? userAch.unlocktime : 0
+            };
+        });
+
+        // 4. Save this specific user's progress to MongoDB
+        const achievementPromises = finalAchievements.map(ach => {
+            return Achievement.findOneAndUpdate(
+                { userId: steamid, appid: appid, apiname: ach.apiname },
+                { 
+                    achieved: ach.achieved, 
+                    unlocktime: ach.unlocktime, 
+                    displayName: ach.displayName, 
+                    iconUrl: ach.iconUrl 
+                },
+                { upsert: true }
+            );
+        });
+        await Promise.all(achievementPromises);
+
+        // 5. Send data back to the frontend
+        res.json({ message: "Success", achievements: finalAchievements });
+
+    } catch (error) {
+        console.error("ACHIEVEMENT FETCH ERROR:", error);
+        res.status(500).json({ message: "Server Error: " + error.message });
+    }
+});
+
+// Get all games for a user from MongoDB (so we don't have to hit Steam API again)
+app.get('/api/games/:steamid', async (req, res) => {
+    try {
+        // Find the user first
+        const user = await User.findOne({ steamId: req.params.steamid });
+        if (!user) return res.status(404).json({ message: "User not found in database. Try syncing first." });
+
+        // Since we didn't strictly link Game to User in the schema earlier, 
+        // for now we will just return all games (we can fix the schema later to be more robust)
+        const games = await Game.find({}); 
+        res.json(games);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
