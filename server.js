@@ -186,6 +186,18 @@ app.get('/api/games/:steamid', async (req, res) => {
     }
 });
 
+// Get achievements from MongoDB for a specific game and user
+app.get('/api/achievements/:steamid/:appid', async (req, res) => {
+    try {
+        const { steamid, appid } = req.params;
+        // Find all achievements matching this user and this game
+        const achievements = await Achievement.find({ userId: steamid, appid: appid });
+        res.json(achievements);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
