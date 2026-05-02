@@ -2,6 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const User = require('./models/User');
+const Game = require('./models/Game');
+const Achievement = require('./models/Achievement');
 
 const app = express();
 app.use(cors());
@@ -48,6 +51,44 @@ app.get('/api/steam/games/:steamid', async (req, res) => {
         const response = await axios.get(url);
         res.json(response.data.response);
     } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/steam/sync/:steamid', async (req, res) => {
+    const { steamid } = req.params;
+    const apiKey = process.env.STEAM_API_KEY;
+
+    try {
+        // 1. Sync Profile
+        const profileUrl = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${apiKey}&steamids=${steamid}`;
+        const profileRes = await axios.get(profileUrl);
+        const p = profileRes.data.response.players[0];
+
+        await User.findOneAndUpdate(
+            { steamId: steamid },
+            { personaname: p.personaname, profileurl: p.profileurl, avatar: p.avatarfull, lastUpdated: Date.now() },
+            { upsert: true } // "Upsert" means: Update if exists, Insert if it doesn't
+        );
+
+        // 2. Sync Owned Games
+        const gamesUrl = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${apiKey}&steamid=${steamid}&include_appinfo=true`;
+        const gamesRes = await axios.get(gamesUrl);
+        const games = gamesRes.data.response.games;
+
+        // Save games to the database
+        const gamePromises = games.map(game => {
+            return Game.findOneAndUpdate(
+                { appid: game.appid },
+                { name: game.name, img_icon_url: game.img_icon_url, playtime_forever: game.playtime_forever },
+                { upsert: true }
+            );
+        });
+        await Promise.all(gamePromises);
+
+        res.json({ success: true, message: `Synced ${games.length} games for ${p.personaname}` });
+    } catch (error) {
+        console.error(error);
         res.status(500).json({ error: error.message });
     }
 });
