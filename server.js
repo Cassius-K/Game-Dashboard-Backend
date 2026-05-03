@@ -491,6 +491,8 @@ app.get('/api/search/xbox/:query', async (req, res) => {
         
         // GET request
         const searchRes = await axios.get(url, { headers: getXboxHeaders() });
+		
+		console.log("RAW XBOX DATA:", JSON.stringify(searchRes.data, null, 2));
         
         const matches = searchRes.data.people || [];
         const formattedResults = matches.map(p => ({
