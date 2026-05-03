@@ -14,7 +14,11 @@ const {
     getUserTitles, 
     getUserTitlesLog,
     getUserTrophiesFromTitle,
-    getTitleTrophies
+    getTitleTrophies,
+    // NEW: Added imports for the advanced PSN features
+    getProfileFromUserName,
+    getUserTrophyProfileSummary,
+    makeUniversalSearch
 } = require("psn-api");
 
 const app = express();
@@ -32,12 +36,18 @@ async function getPsnToken(npsso) {
     return await exchangeCodeForAccessToken(accessCode);
 }
 
+// NEW: Helper function to ensure we always have a valid token for PSN routes
+async function getValidPsnToken(username) {
+    const user = await SuperUser.findOne({ username });
+    if (!user || !user.psnNpsso) throw new Error("PSN Account not linked.");
+    return await getPsnToken(user.psnNpsso);
+}
+
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log("Connected to MongoDB Atlas"))
     .catch((err) => console.log("Failed to connect to MongoDB", err));
 	
-
 app.get('/api/steam/profile/:steamid', async (req, res) => {
     const { steamid } = req.params;
     const apiKey = process.env.STEAM_API_KEY;
@@ -228,13 +238,17 @@ app.get('/api/games/:steamid', async (req, res) => {
 app.get('/api/achievements/:steamid/:appid', async (req, res) => {
     try {
         const { steamid, appid } = req.params;
-        // Find all achievements matching this user and this game
-        const achievements = await Achievement.find({ userId: steamid, appid: appid });
+        // UPDATED: Query using platformGameId instead of appid to match the new schema
+        const achievements = await Achievement.find({ userId: steamid, platformGameId: appid });
         res.json(achievements);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
+
+// ==========================================
+// --- PLAYSTATION ROUTES ---
+// ==========================================
 
 // 1. LINK PSN ACCOUNT
 app.post('/api/auth/link-psn', async (req, res) => {
@@ -261,7 +275,8 @@ app.post('/api/auth/link-psn', async (req, res) => {
     }
 });
 
-// 2. SYNC PSN GAMES (Updated Version)
+// 2. SYNC PSN GAMES 
+// (Removed your duplicate version of this route so it doesn't conflict)
 app.post('/api/psn/sync/:username', async (req, res) => {
     try {
         const user = await SuperUser.findOne({ username: req.params.username });
@@ -291,7 +306,7 @@ app.post('/api/psn/sync/:username', async (req, res) => {
     }
 });
 
-// --- GET PSN TROPHIES ---
+// 3. GET PSN TROPHIES
 app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
     const { username, npId } = req.params;
 
@@ -340,7 +355,67 @@ app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
     }
 });
 
+// 4. GET PSN PROFILE INFO (Avatar, Name)
+app.get('/api/psn/profile/:username/:psnId', async (req, res) => {
+    const { username, psnId } = req.params;
+    try {
+        const token = await getValidPsnToken(username);
+        const profileResponse = await getProfileFromUserName(token, psnId);
+        const profile = profileResponse.profile;
+
+        res.json({
+            onlineId: profile.onlineId,
+            accountId: profile.accountId,
+            avatar: profile.avatarUrls[0]?.avatarUrl || "",
+            aboutMe: profile.aboutMe || "No bio provided."
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 5. GET PSN TROPHY SUMMARY (Level, Progress, Gold/Silver counts)
+app.get('/api/psn/trophy-summary/:username/:accountId', async (req, res) => {
+    const { username, accountId } = req.params;
+    try {
+        const token = await getValidPsnToken(username);
+        const summary = await getUserTrophyProfileSummary(token, accountId);
+        
+        res.json({
+            level: summary.trophyLevel,
+            progress: summary.progress,
+            tier: summary.tier, 
+            earned: summary.earnedTrophies 
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 6. SEARCH FOR PSN PLAYERS
+app.get('/api/search/psn/:username/:query', async (req, res) => {
+    const { username, query } = req.params;
+    try {
+        const token = await getValidPsnToken(username);
+        const searchRes = await makeUniversalSearch(token, query, "SocialAllAccounts");
+        const matches = searchRes.domainResponses[0]?.results || [];
+        
+        const formattedResults = matches.map(match => ({
+            onlineId: match.socialMetadata.onlineId,
+            accountId: match.socialMetadata.accountId,
+            avatar: match.socialMetadata.avatarUrl
+        }));
+
+        res.json(formattedResults);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+// ==========================================
 // --- AUTHENTICATION ROUTES ---
+// ==========================================
 
 // 1. Sign Up
 app.post('/api/auth/signup', async (req, res) => {
@@ -376,7 +451,8 @@ app.post('/api/auth/signin', async (req, res) => {
             message: "Login successful", 
             token, 
             username: user.username, 
-            linkedSteamId: user.linkedSteamId
+            linkedSteamId: user.linkedSteamId,
+            psnAccountId: user.psnAccountId // UPDATED: Also return PSN ID so auto-login works
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -401,6 +477,10 @@ app.post('/api/auth/link-steam', async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 });
+
+// ==========================================
+// --- DASHBOARD & SOCIAL ROUTES ---
+// ==========================================
 
 // --- DASHBOARD STATS ROUTE ---
 app.get('/api/stats/:steamid', async (req, res) => {
