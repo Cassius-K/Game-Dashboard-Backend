@@ -669,6 +669,32 @@ app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
     }
 });
 
+// ==========================================
+// --- Home Screen ---
+// ==========================================
+
+// --- GET CONSOLIDATED MEGA LIBRARY ---
+app.get('/api/library/all/:username', async (req, res) => {
+    try {
+        const user = await SuperUser.findOne({ username: req.params.username });
+        if (!user) return res.status(404).json({ error: "User not found" });
+
+        // Gather all linked IDs that exist for this user
+        const linkedIds = [user.linkedSteamId, user.psnAccountId, user.linkedXboxXuid].filter(Boolean);
+
+        if (linkedIds.length === 0) {
+            return res.json([]); // No linked accounts yet
+        }
+
+        // Find all games matching ANY of these IDs, sorted alphabetically
+        const allGames = await Game.find({ userId: { $in: linkedIds } }).sort({ name: 1 });
+        
+        res.json(allGames);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 
 // ==========================================
 // --- AUTHENTICATION ROUTES ---
