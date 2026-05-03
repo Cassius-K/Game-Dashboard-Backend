@@ -435,6 +435,154 @@ app.get('/api/search/psn/:username/:query', async (req, res) => {
 
 
 // ==========================================
+// --- XBOX (OpenXBL) ROUTES ---
+// ==========================================
+
+// Helper configuration for OpenXBL API requests
+const getXboxHeaders = () => ({
+    headers: {
+        'X-Authorization': process.env.XBOX_API_KEY,
+        'Accept': 'application/json'
+    }
+});
+
+// 1. LINK XBOX ACCOUNT
+app.post('/api/auth/link-xbox', async (req, res) => {
+    try {
+        const { username, gamertag } = req.body;
+
+        // Search OpenXBL to get the XUID for this Gamertag
+        const searchRes = await axios.get(`https://xbl.io/api/v2/search/${gamertag}`, getXboxHeaders());
+        
+        if (!searchRes.data.people || searchRes.data.people.length === 0) {
+            return res.status(404).json({ message: "Gamertag not found." });
+        }
+
+        const xuid = searchRes.data.people[0].xuid;
+        const realGamertag = searchRes.data.people[0].gamertag;
+
+        // Save to DB
+        const updatedUser = await SuperUser.findOneAndUpdate(
+            { username: username },
+            { linkedXboxXuid: xuid, xboxGamertag: realGamertag },
+            { new: true }
+        );
+
+        res.json({ message: "Xbox account linked successfully!", xuid: xuid, gamertag: realGamertag });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Failed to link Xbox account. Check API key." });
+    }
+});
+
+// 2. SEARCH XBOX PLAYERS
+app.get('/api/search/xbox/:query', async (req, res) => {
+    try {
+        const { query } = req.params;
+        const searchRes = await axios.get(`https://xbl.io/api/v2/search/${query}`, getXboxHeaders());
+        
+        const matches = searchRes.data.people || [];
+        const formattedResults = matches.map(p => ({
+            xuid: p.xuid,
+            gamertag: p.gamertag,
+            avatar: p.displayPicRaw
+        }));
+
+        res.json(formattedResults);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 3. GET XBOX PROFILE INFO
+app.get('/api/xbox/profile/:xuid', async (req, res) => {
+    try {
+        const { xuid } = req.params;
+        const profileRes = await axios.get(`https://xbl.io/api/v2/player/summary/${xuid}`, getXboxHeaders());
+        const p = profileRes.data.people[0];
+
+        res.json({
+            gamertag: p.gamertag,
+            xuid: p.xuid,
+            avatar: p.displayPicRaw,
+            gamerscore: p.gamerScore,
+            presence: p.presenceState // 'Online' or 'Offline'
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 4. SYNC XBOX GAMES
+app.post('/api/xbox/sync/:xuid', async (req, res) => {
+    try {
+        const { xuid } = req.params;
+        
+        // Fetch recently played titles / achievement history
+        const gamesRes = await axios.get(`https://xbl.io/api/v2/achievements/player/${xuid}`, getXboxHeaders());
+        const titles = gamesRes.data.titles || [];
+
+        // Save to Database
+        const gamePromises = titles.map(title => {
+            return Game.findOneAndUpdate(
+                { userId: xuid, platform: 'Xbox', platformGameId: title.titleId.toString() },
+                { 
+                    name: title.name, 
+                    img_icon_url: title.displayImage, 
+                    playtime_forever: 0 // Xbox provides playtime in a different format, default to 0 for now
+                },
+                { upsert: true }
+            );
+        });
+        await Promise.all(gamePromises);
+
+        res.json({ message: `Success! Synced ${titles.length} Xbox games.` });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 5. GET XBOX ACHIEVEMENTS
+app.get('/api/xbox/achievements/:xuid/:titleId', async (req, res) => {
+    try {
+        const { xuid, titleId } = req.params;
+        const achRes = await axios.get(`https://xbl.io/api/v2/achievements/player/${xuid}/title/${titleId}`, getXboxHeaders());
+        const achievements = achRes.data.achievements || [];
+
+        if (achievements.length === 0) return res.json({ error: "No achievements found." });
+
+        const finalAchievements = achievements.map(ach => {
+            const isUnlocked = ach.progressState === "Achieved";
+            return {
+                userId: xuid,
+                platform: 'Xbox',
+                platformGameId: titleId,
+                apiname: ach.id.toString(),
+                displayName: ach.name,
+                description: ach.lockedDescription || ach.description,
+                iconUrl: ach.mediaAssets[0]?.url || "",
+                achieved: isUnlocked ? 1 : 0,
+                unlocktime: isUnlocked && ach.progression?.timeUnlocked ? new Date(ach.progression.timeUnlocked).getTime() / 1000 : 0
+            };
+        });
+
+        const achievementPromises = finalAchievements.map(t => {
+            return Achievement.findOneAndUpdate(
+                { userId: t.userId, platform: 'Xbox', apiname: t.apiname, platformGameId: titleId },
+                t,
+                { upsert: true }
+            );
+        });
+        await Promise.all(achievementPromises);
+
+        res.json(finalAchievements);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+// ==========================================
 // --- AUTHENTICATION ROUTES ---
 // ==========================================
 
