@@ -602,21 +602,21 @@ app.post('/api/xbox/sync/:xuid', async (req, res) => {
     }
 });
 
-// 5. GET XBOX ACHIEVEMENTS (Updated to handle 'content' wrapper and detect privacy walls)
-app.get('/api/xbox/achievements/:xuid/:titleId', async (req, res) => {
+// 5. GET XBOX ACHIEVEMENTS (Updated to handle 'content' wrapper and specific target XUID)
+app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
     try {
-        const { xuid, titleId } = req.params;
-        const url = `https://xbl.io/api/v2/achievements/player/${xuid}/title/${titleId}`;
+        // FIXED: Now expecting targetXuid from the URL
+        const { targetXuid, titleId } = req.params; 
+        const url = `https://xbl.io/api/v2/achievements/player/${targetXuid}/title/${titleId}`;
         
         let achRes;
         try {
             achRes = await axios.get(url, { headers: getXboxHeaders() });
         } catch (e) {
-            console.error(`Xbox API rejected stats for user ${xuid} on game ${titleId}.`);
+            console.error(`Xbox API rejected stats for user ${targetXuid} on game ${titleId}.`);
             return res.json({ error: "Game stats are private or no achievements exist." });
         }
 
-        // Safely extract the 'achievements' array
         const responseData = achRes.data.content ? achRes.data.content : achRes.data;
         const achievements = responseData.achievements || [];
 
@@ -630,7 +630,7 @@ app.get('/api/xbox/achievements/:xuid/:titleId', async (req, res) => {
         const finalAchievements = achievements.map(ach => {
             const isUnlocked = ach.progressState === "Achieved";
             return {
-                userId: xuid,
+                userId: targetXuid, // FIXED: Save under the correct target user's ID
                 platform: 'Xbox',
                 platformGameId: titleId,
                 apiname: ach.id.toString(),
