@@ -543,37 +543,21 @@ app.get('/api/xbox/profile/:xuid', async (req, res) => {
     }
 });
 
-// --- TEMPORARY DEBUG ROUTE: XBOX GAMES ---
-app.get('/api/debug/xbox-games/:xuid', async (req, res) => {
-    try {
-        const { xuid } = req.params;
-        const url = `https://xbl.io/api/v2/achievements/player/${xuid}`;
-        
-        const gamesRes = await axios.get(url, { headers: getXboxHeaders() });
-        
-        // Send the RAW JSON directly back to your screen
-        res.json({
-            status: "SUCCESS",
-            raw_data_from_openxbl: gamesRes.data
-        });
-    } catch (error) {
-        res.json({
-            status: "FAILED",
-            error_message: error.message,
-            error_details: error.response ? error.response.data : "No details"
-        });
-    }
-});
-
-// 4. SYNC XBOX GAMES
+// 4. SYNC XBOX GAMES (Updated to handle OpenXBL 'content' wrapper)
 app.post('/api/xbox/sync/:xuid', async (req, res) => {
     try {
         const { xuid } = req.params;
         const url = `https://xbl.io/api/v2/achievements/player/${xuid}`;
         
-        // GET request
         const gamesRes = await axios.get(url, { headers: getXboxHeaders() });
-        const titles = gamesRes.data.titles || [];
+        
+        // Safely extract the 'titles' array, whether it's wrapped in 'content' or not
+        const responseData = gamesRes.data.content ? gamesRes.data.content : gamesRes.data;
+        const titles = responseData.titles || [];
+
+        if (titles.length === 0) {
+            return res.json({ message: "No Xbox games found to sync. Profile may be private." });
+        }
 
         const gamePromises = titles.map(title => {
             return Game.findOneAndUpdate(
@@ -581,6 +565,7 @@ app.post('/api/xbox/sync/:xuid', async (req, res) => {
                 { 
                     name: title.name, 
                     img_icon_url: title.displayImage, 
+                    // Xbox provides playtime in minutes deep inside stats, but for now we default to 0 to prevent crashes
                     playtime_forever: 0 
                 },
                 { upsert: true }
@@ -588,8 +573,17 @@ app.post('/api/xbox/sync/:xuid', async (req, res) => {
         });
         await Promise.all(gamePromises);
 
-        res.json({ message: `Success! Synced ${titles.length} Xbox games.` });
+        // Optional Cleanup: Remove games not in the current list
+        const validTitleIds = titles.map(t => t.titleId.toString());
+        const deleteResult = await Game.deleteMany({
+            userId: xuid,
+            platform: 'Xbox',
+            platformGameId: { $nin: validTitleIds }
+        });
+
+        res.json({ message: `Success! Synced ${titles.length} Xbox games. Removed ${deleteResult.deletedCount} old entries.` });
     } catch (error) {
+        console.error("XBOX SYNC ERROR:", error.response ? error.response.data : error.message);
         res.status(500).json({ error: error.message });
     }
 });
