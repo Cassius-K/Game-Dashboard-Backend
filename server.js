@@ -438,12 +438,9 @@ app.get('/api/search/psn/:username/:query', async (req, res) => {
 // --- XBOX (OpenXBL) ROUTES ---
 // ==========================================
 
-// Helper configuration for OpenXBL API requests
 const getXboxHeaders = () => {
     const key = process.env.XBOX_API_KEY;
     if (!key) console.error("WARNING: XBOX_API_KEY is not set in environment variables!");
-    
-    // Return just the headers object, not wrapped in another object
     return {
         'X-Authorization': key,
         'Accept': 'application/json',
@@ -451,23 +448,35 @@ const getXboxHeaders = () => {
     };
 };
 
+// NEW: Bulletproof helper to extract the player array from OpenXBL, regardless of what they name it
+function extractXboxPlayers(data) {
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data.people)) return data.people;
+    if (Array.isArray(data.users)) return data.users;
+    if (Array.isArray(data.profileUsers)) return data.profileUsers;
+    
+    // If they changed the name again, just find whatever array is in the object
+    for (let key in data) {
+        if (Array.isArray(data[key])) return data[key];
+    }
+    return [];
+}
+
 // 1. LINK XBOX ACCOUNT
 app.post('/api/auth/link-xbox', async (req, res) => {
     try {
         const { username, gamertag } = req.body;
-
         const encodedQuery = encodeURIComponent(gamertag);
-        const url = `https://xbl.io/api/v2/search/${encodedQuery}`;
+        const searchRes = await axios.get(`https://xbl.io/api/v2/search/${encodedQuery}`, { headers: getXboxHeaders() });
         
-        // GET request: URL is arg 1, Config { headers } is arg 2
-        const searchRes = await axios.get(url, { headers: getXboxHeaders() });
+        const matches = extractXboxPlayers(searchRes.data);
         
-        if (!searchRes.data.people || searchRes.data.people.length === 0) {
+        if (matches.length === 0) {
             return res.status(404).json({ message: "Gamertag not found." });
         }
 
-        const xuid = searchRes.data.people[0].xuid;
-        const realGamertag = searchRes.data.people[0].gamertag;
+        const xuid = matches[0].xuid;
+        const realGamertag = matches[0].uniqueModernGamertag || matches[0].gamertag;
 
         const updatedUser = await SuperUser.findOneAndUpdate(
             { username: username },
@@ -477,8 +486,8 @@ app.post('/api/auth/link-xbox', async (req, res) => {
 
         res.json({ message: "Xbox account linked successfully!", xuid: xuid, gamertag: realGamertag });
     } catch (error) {
-        console.error(error.response ? error.response.data : error.message);
-        res.status(500).json({ message: "Failed to link Xbox account. Check API key." });
+        console.error(error);
+        res.status(500).json({ message: "Failed to link Xbox account." });
     }
 });
 
@@ -487,17 +496,13 @@ app.get('/api/search/xbox/:query', async (req, res) => {
     try {
         const { query } = req.params;
         const encodedQuery = encodeURIComponent(query);
-        const url = `https://xbl.io/api/v2/search/${encodedQuery}`;
+        const searchRes = await axios.get(`https://xbl.io/api/v2/search/${encodedQuery}`, { headers: getXboxHeaders() });
         
-        const searchRes = await axios.get(url, { headers: getXboxHeaders() });
+        // Use our new smart extractor
+        const matches = extractXboxPlayers(searchRes.data);
         
-        // Safely extract the 'people' array from the response
-        const matches = searchRes.data.people || [];
-        
-        // Map it so the frontend always gets the same clean object structure
         const formattedResults = matches.map(p => ({
             xuid: p.xuid,
-            // Prefer the uniqueModernGamertag (handles duplicate names with # numbers)
             gamertag: p.uniqueModernGamertag || p.gamertag,
             avatar: p.displayPicRaw
         }));
@@ -505,9 +510,6 @@ app.get('/api/search/xbox/:query', async (req, res) => {
         res.json(formattedResults);
     } catch (error) {
         console.error("XBOX SEARCH ERROR:", error.response ? error.response.data : error.message);
-        if (error.response && error.response.status === 401) {
-            return res.status(500).json({ error: "OpenXBL API Key is invalid or expired." });
-        }
         res.status(500).json({ error: "Failed to search Xbox network." });
     }
 });
@@ -516,14 +518,16 @@ app.get('/api/search/xbox/:query', async (req, res) => {
 app.get('/api/xbox/profile/:xuid', async (req, res) => {
     try {
         const { xuid } = req.params;
-        const url = `https://xbl.io/api/v2/player/summary/${xuid}`;
+        const profileRes = await axios.get(`https://xbl.io/api/v2/player/summary/${xuid}`, { headers: getXboxHeaders() });
         
-        // GET request
-        const profileRes = await axios.get(url, { headers: getXboxHeaders() });
-        const p = profileRes.data.people[0];
+        // Use our new smart extractor here too!
+        const matches = extractXboxPlayers(profileRes.data);
+        if (matches.length === 0) return res.status(404).json({ error: "Profile data missing." });
+        
+        const p = matches[0];
 
         res.json({
-            gamertag: p.gamertag,
+            gamertag: p.uniqueModernGamertag || p.gamertag,
             xuid: p.xuid,
             avatar: p.displayPicRaw,
             gamerscore: p.gamerScore,
