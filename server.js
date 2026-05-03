@@ -617,6 +617,10 @@ app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
 
         const responseData = achRes.data.content ? achRes.data.content : achRes.data;
         const achievements = responseData.achievements || [];
+		
+		if (achievements.length > 0) {
+            console.log("RAW XBOX 360 ACHIEVEMENT DATA (First item):", JSON.stringify(achievements[0], null, 2));
+        }
 
         if (achievements.length === 0) {
             return res.json({ 
