@@ -588,17 +588,27 @@ app.post('/api/xbox/sync/:xuid', async (req, res) => {
     }
 });
 
-// 5. GET XBOX ACHIEVEMENTS
+// 5. GET XBOX ACHIEVEMENTS (Updated to handle 'content' wrapper and detect privacy walls)
 app.get('/api/xbox/achievements/:xuid/:titleId', async (req, res) => {
     try {
         const { xuid, titleId } = req.params;
         const url = `https://xbl.io/api/v2/achievements/player/${xuid}/title/${titleId}`;
         
-        // GET request
-        const achRes = await axios.get(url, { headers: getXboxHeaders() });
-        const achievements = achRes.data.achievements || [];
+        let achRes;
+        try {
+            achRes = await axios.get(url, { headers: getXboxHeaders() });
+        } catch (e) {
+            console.error(`Xbox API rejected stats for user ${xuid} on game ${titleId}.`);
+            return res.json({ error: "Game stats are private or no achievements exist." });
+        }
 
-        if (achievements.length === 0) return res.json({ error: "No achievements found." });
+        // Safely extract the 'achievements' array
+        const responseData = achRes.data.content ? achRes.data.content : achRes.data;
+        const achievements = responseData.achievements || [];
+
+        if (achievements.length === 0) {
+            return res.json({ error: "No achievements found for this title." });
+        }
 
         const finalAchievements = achievements.map(ach => {
             const isUnlocked = ach.progressState === "Achieved";
@@ -608,8 +618,8 @@ app.get('/api/xbox/achievements/:xuid/:titleId', async (req, res) => {
                 platformGameId: titleId,
                 apiname: ach.id.toString(),
                 displayName: ach.name,
-                description: ach.lockedDescription || ach.description,
-                iconUrl: ach.mediaAssets[0]?.url || "",
+                description: ach.lockedDescription || ach.description || "Hidden Achievement",
+                iconUrl: ach.mediaAssets && ach.mediaAssets[0] ? ach.mediaAssets[0].url : "",
                 achieved: isUnlocked ? 1 : 0,
                 unlocktime: isUnlocked && ach.progression?.timeUnlocked ? new Date(ach.progression.timeUnlocked).getTime() / 1000 : 0
             };
@@ -626,6 +636,7 @@ app.get('/api/xbox/achievements/:xuid/:titleId', async (req, res) => {
 
         res.json(finalAchievements);
     } catch (error) {
+        console.error("XBOX ACHIEVEMENT ERROR:", error);
         res.status(500).json({ error: error.message });
     }
 });
