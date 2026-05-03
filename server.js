@@ -249,26 +249,35 @@ app.get('/api/achievements/:steamid/:appid', async (req, res) => {
 // --- PLAYSTATION ROUTES ---
 // ==========================================
 
-// 1. LINK PSN ACCOUNT
+// 1. LINK PSN ACCOUNT (Updated to fetch real onlineId)
 app.post('/api/auth/link-psn', async (req, res) => {
     try {
         const { username, npsso } = req.body;
         
-        // Test the npsso and get user info
+        // 1. Test the npsso and get user info
         const token = await getPsnToken(npsso);
         
-        // Update user in DB
+        // 2. NEW: Use the "me" shortcut to ask Sony for our real username
+        const { getProfileFromUserName } = require("psn-api"); 
+        const myProfile = await getProfileFromUserName(token, "me");
+        const realOnlineId = myProfile.profile.onlineId;
+        
+        // 3. Update user in DB with both IDs
         const updatedUser = await SuperUser.findOneAndUpdate(
             { username: username },
             { 
                 psnNpsso: npsso,
-                psnAccountId: token.accountId, // Sony's internal ID
-                linkedPsnId: "Linked" 
+                psnAccountId: token.accountId, 
+                linkedPsnId: realOnlineId // We now save the real PSN Username!
             },
             { new: true }
         );
 
-        res.json({ message: "PlayStation account linked successfully!", accountId: token.accountId });
+        res.json({ 
+            message: "PlayStation account linked successfully!", 
+            accountId: token.accountId,
+            onlineId: realOnlineId 
+        });
     } catch (error) {
         res.status(500).json({ message: "Invalid npsso token or Sony error." });
     }
