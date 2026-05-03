@@ -439,12 +439,18 @@ app.get('/api/search/psn/:username/:query', async (req, res) => {
 // ==========================================
 
 // Helper configuration for OpenXBL API requests
-const getXboxHeaders = () => ({
-    headers: {
-        'X-Authorization': process.env.XBOX_API_KEY,
-        'Accept': 'application/json'
-    }
-});
+const getXboxHeaders = () => {
+    const key = process.env.XBOX_API_KEY;
+    if (!key) console.error("WARNING: XBOX_API_KEY is not set in environment variables!");
+    
+    return {
+        headers: {
+            'X-Authorization': key,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+    };
+};
 
 // 1. LINK XBOX ACCOUNT
 app.post('/api/auth/link-xbox', async (req, res) => {
@@ -479,7 +485,14 @@ app.post('/api/auth/link-xbox', async (req, res) => {
 app.get('/api/search/xbox/:query', async (req, res) => {
     try {
         const { query } = req.params;
-        const searchRes = await axios.get(`https://xbl.io/api/v2/search/${query}`, getXboxHeaders());
+        
+        // CRITICAL: Encode the gamertag in case it has spaces (e.g., "Major Nelson")
+        const encodedQuery = encodeURIComponent(query);
+        
+        const url = `https://xbl.io/api/v2/search/${encodedQuery}`;
+        console.log(`Sending Xbox Search request to: ${url}`); // Add this to check your logs
+
+        const searchRes = await axios.get(url, getXboxHeaders());
         
         const matches = searchRes.data.people || [];
         const formattedResults = matches.map(p => ({
@@ -490,7 +503,13 @@ app.get('/api/search/xbox/:query', async (req, res) => {
 
         res.json(formattedResults);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error("XBOX SEARCH ERROR:", error.response ? error.response.data : error.message);
+        
+        // Provide a clearer error message to the frontend
+        if (error.response && error.response.status === 401) {
+            return res.status(500).json({ error: "OpenXBL API Key is invalid or expired." });
+        }
+        res.status(500).json({ error: "Failed to search Xbox network." });
     }
 });
 
