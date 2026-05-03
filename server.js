@@ -15,7 +15,7 @@ const {
     getUserTitlesLog,
     getUserTrophiesFromTitle,
     getTitleTrophies,
-	getUserTrophiesEarnedForTitle,
+    getUserTrophiesEarnedForTitle,
     getProfileFromUserName,
     getUserTrophyProfileSummary,
     makeUniversalSearch
@@ -143,6 +143,7 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
     }
 });
 
+// --- UPDATED: STEAM ACHIEVEMENTS WITH PRIVACY FLAG ---
 app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
     const { steamid, appid } = req.params;
     const apiKey = process.env.STEAM_API_KEY;
@@ -160,13 +161,15 @@ app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
         // 2. Get the USER'S progress on those achievements
         const userStatsUrl = `http://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v0001/?appid=${appid}&key=${apiKey}&steamid=${steamid}`;
         let userUnlocked = [];
+        let isPrivate = false; // FLAG to tell frontend if API blocked us
         
         try {
             const userRes = await axios.get(userStatsUrl);
             userUnlocked = userRes.data?.playerstats?.achievements || [];
         } catch (e) {
-            // Steam returns a 400 error if the user has NEVER played the game
-            console.log(`User hasn't played game ${appid} or stats are private.`);
+            // Steam returns a 400 error if the user has NEVER played the game OR if it is private
+            isPrivate = true;
+            console.log(`Steam API rejected stats for user ${steamid} on game ${appid}. (Private or never played)`);
         }
 
         // 3. Combine the data so we know the names, icons, AND unlock status
@@ -174,6 +177,9 @@ app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
             const userAch = userUnlocked.find(u => u.apiname === schemaAch.name);
             
             return {
+                userId: steamid, // Ensure we tag this trophy to the specific user
+                platform: 'Steam',
+                platformGameId: appid,
                 apiname: schemaAch.name,
                 displayName: schemaAch.displayName,
                 description: schemaAch.description,
@@ -188,23 +194,18 @@ app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
             return Achievement.findOneAndUpdate(
                 { 
                     userId: steamid, 
-                    platformGameId: appid, // Changed from appid to platformGameId
-                    platform: 'Steam',      // Added platform
+                    platformGameId: appid, 
+                    platform: 'Steam',      
                     apiname: ach.apiname 
                 },
-                { 
-                    achieved: ach.achieved, 
-                    unlocktime: ach.unlocktime, 
-                    displayName: ach.displayName, 
-                    iconUrl: ach.iconUrl 
-                },
+                ach, // Save the whole compiled object
                 { upsert: true }
             );
         });
         await Promise.all(achievementPromises);
 
-        // 5. Send data back to the frontend
-        res.json({ message: "Success", achievements: finalAchievements });
+        // 5. Send data back to the frontend (including the privacy flag)
+        res.json({ message: "Success", isPrivate: isPrivate, achievements: finalAchievements });
 
     } catch (error) {
         console.error("ACHIEVEMENT FETCH ERROR:", error);
@@ -284,17 +285,17 @@ app.post('/api/auth/link-psn', async (req, res) => {
     }
 });
 
-// 2. SYNC PSN GAMES (Updated to allow syncing ANY public PSN account)
+// --- UPDATED: SYNC PSN GAMES WITH TARGET ID ---
 app.post('/api/psn/sync/:username/:targetAccountId', async (req, res) => {
     try {
-        const { username, targetAccountId } = req.params; // Get the target ID from the URL
+        const { username, targetAccountId } = req.params; 
         
         const user = await SuperUser.findOne({ username: username });
         if (!user.psnNpsso) return res.status(400).json({ message: "PSN not linked." });
 
         const token = await getPsnToken(user.psnNpsso);
         
-        // FIXED: Replaced "me" with the targetAccountId so we sync friends
+        // Use targetAccountId so we can sync friends
         const response = await getUserTitles(token, targetAccountId);
         const titles = response.trophyTitles || [];
 
@@ -318,7 +319,7 @@ app.post('/api/psn/sync/:username/:targetAccountId', async (req, res) => {
     }
 });
 
-// 3. GET PSN TROPHIES (Updated to fetch specific user's progress)
+// --- UPDATED: GET PSN TROPHIES WITH TARGET ID ---
 app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, res) => {
     const { username, targetAccountId, npId } = req.params;
 
@@ -333,7 +334,7 @@ app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, re
         // 2. Get User Progress
         let userProgress = [];
         try {
-            // FIXED: We now pass `targetAccountId` instead of "me"
+            // Ask Sony for the specific target user's progress
             const progressRes = await getUserTrophiesEarnedForTitle(token, targetAccountId, npId, "all", { npServiceName: "trophy" });
             userProgress = progressRes.trophies || [];
         } catch (e) {
@@ -344,7 +345,7 @@ app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, re
         const finalTrophies = trophyDefinitions.map(def => {
             const prog = userProgress.find(p => p.trophyId === def.trophyId);
             return {
-                userId: targetAccountId, // FIXED: Save it under the target user's ID
+                userId: targetAccountId, // Save it under the target user's ID
                 platform: 'PSN',
                 platformGameId: npId,
                 apiname: def.trophyId.toString(),

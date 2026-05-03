@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const AchievementSchema = new mongoose.Schema({
-    userId: String,
+    userId: { type: String, required: true },
     platform: String,
     platformGameId: String,
     apiname: String, // unique ID for the trophy
