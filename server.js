@@ -7,6 +7,7 @@ const Game = require('./models/Game');
 const Achievement = require('./models/Achievement');
 const jwt = require('jsonwebtoken');
 const SuperUser = require('./models/SuperUser');
+const axios = require('axios'); // Moved axios to the top with other imports
 const { 
     exchangeNpssoForCode, 
     exchangeCodeForAccessToken, 
@@ -36,7 +37,6 @@ mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log("Connected to MongoDB Atlas"))
     .catch((err) => console.log("Failed to connect to MongoDB", err));
 	
-const axios = require('axios');
 
 app.get('/api/steam/profile/:steamid', async (req, res) => {
     const { steamid } = req.params;
@@ -100,7 +100,8 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
         // 4. Update or Insert the valid games
         const gamePromises = validGames.map(game => {
             return Game.findOneAndUpdate(
-                { appid: game.appid },
+                // UPDATED: Added userId and platform to the find criteria
+                { appid: game.appid, userId: steamid, platform: 'Steam' },
                 { name: game.name, img_icon_url: game.img_icon_url, playtime_forever: game.playtime_forever },
                 { upsert: true }
             );
@@ -108,11 +109,12 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
         await Promise.all(gamePromises);
 
         // 5. THE CLEANUP: Delete "Private" or "Removed" games
-        // Get an array of all AppIDs we just received from Steam
         const validAppIds = validGames.map(g => g.appid);
 
-        // Delete any game in our MongoDB that was NOT in the list we just got from Steam
+        // FIXED: Added userId filter so we only delete THIS user's orphaned games, not everyone's
         const deleteResult = await Game.deleteMany({ 
+            userId: steamid,
+            platform: 'Steam',
             appid: { $nin: validAppIds } 
         });
 
@@ -148,21 +150,19 @@ app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
             const userRes = await axios.get(userStatsUrl);
             userUnlocked = userRes.data?.playerstats?.achievements || [];
         } catch (e) {
-            // Steam returns a 400 error if the user has NEVER played the game, 
-            // so we just catch it and leave userUnlocked empty.
+            // Steam returns a 400 error if the user has NEVER played the game
             console.log(`User hasn't played game ${appid} or stats are private.`);
         }
 
         // 3. Combine the data so we know the names, icons, AND unlock status
         const finalAchievements = availableAchievements.map(schemaAch => {
-            // Find if the user unlocked this specific achievement
             const userAch = userUnlocked.find(u => u.apiname === schemaAch.name);
             
             return {
                 apiname: schemaAch.name,
                 displayName: schemaAch.displayName,
                 description: schemaAch.description,
-                iconUrl: userAch?.achieved ? schemaAch.icon : schemaAch.icongray, // Use colored icon if unlocked
+                iconUrl: userAch?.achieved ? schemaAch.icon : schemaAch.icongray, 
                 achieved: userAch ? userAch.achieved : 0,
                 unlocktime: userAch ? userAch.unlocktime : 0
             };
@@ -197,20 +197,15 @@ app.get('/api/games/:steamid', async (req, res) => {
     try {
         const { steamid } = req.params;
 
-        // 1. Verification Check:
-        // We look in our cached 'User' collection (Steam) OR our 'SuperUser' collection (Website Account)
-        // to make sure this is a valid player we have tracked.
+        // 1. Verification Check
         const user = await User.findOne({ steamId: steamid });
         
-        // Note: If you are looking up a PSN player, 'user' might be null here if they don't have Steam.
-        // We can add a check for PSN users here later, but for now, we'll keep your Steam check.
-        if (!user && !steamid.startsWith('NP')) { 
+        // Allow PSN IDs (Sony IDs usually look like long strings of numbers)
+        if (!user && !steamid.match(/^\d+$/)) { 
             return res.status(404).json({ message: "User not found in database. Try syncing first." });
         }
 
-        // 2. The Isolated Query:
-        // Instead of Game.find({}), we filter by 'userId'. 
-        // This ensures if I view 'Alex', I only see 'Alex's' games.
+        // 2. The Isolated Query
         const games = await Game.find({ userId: steamid }).sort({ name: 1 }); 
         
         res.json(games);
@@ -245,7 +240,7 @@ app.post('/api/auth/link-psn', async (req, res) => {
             { 
                 psnNpsso: npsso,
                 psnAccountId: token.accountId, // Sony's internal ID
-                linkedPsnId: "Linked" // We'll update the actual name during sync
+                linkedPsnId: "Linked" 
             },
             { new: true }
         );
@@ -256,38 +251,7 @@ app.post('/api/auth/link-psn', async (req, res) => {
     }
 });
 
-// 2. SYNC PSN GAMES
-app.post('/api/psn/sync/:username', async (req, res) => {
-    try {
-        const user = await SuperUser.findOne({ username: req.params.username });
-        if (!user.psnNpsso) return res.status(400).json({ message: "PSN not linked." });
-
-        const token = await getPsnToken(user.psnNpsso);
-        
-        // Get list of games played on PSN
-        const response = await getUserTitles(token, "me");
-        const titles = response.trophyTitles || [];
-
-        const gamePromises = titles.map(title => {
-            return Game.findOneAndUpdate(
-                { userId: user.psnAccountId, platform: 'PSN', platformGameId: title.npCommunicationId },
-                { 
-                    name: title.trophyTitleName, 
-                    img_icon_url: title.trophyTitleIconUrl,
-                    playtime_forever: 0 // PSN API doesn't easily provide playtime
-                },
-                { upsert: true }
-            );
-        });
-        await Promise.all(gamePromises);
-
-        res.json({ message: `Synced ${titles.length} PlayStation games!` });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// --- UPDATED: SYNC PSN GAMES ---
+// 2. SYNC PSN GAMES (Updated Version)
 app.post('/api/psn/sync/:username', async (req, res) => {
     try {
         const user = await SuperUser.findOne({ username: req.params.username });
@@ -317,7 +281,7 @@ app.post('/api/psn/sync/:username', async (req, res) => {
     }
 });
 
-// --- NEW: SYNC & GET PSN TROPHIES ---
+// --- GET PSN TROPHIES ---
 app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
     const { username, npId } = req.params;
 
@@ -325,11 +289,11 @@ app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
         const user = await SuperUser.findOne({ username });
         const token = await getPsnToken(user.psnNpsso);
 
-        // 1. Get Trophy Definitions (Names/Icons/Descriptions)
+        // 1. Get Trophy Definitions
         const trophyRes = await getTitleTrophies(token, npId, "all");
         const trophyDefinitions = trophyRes.trophies;
 
-        // 2. Get User Progress (Unlocked status)
+        // 2. Get User Progress
         const progressRes = await getUserTrophiesFromTitle(token, "me", npId, "all");
         const userProgress = progressRes.trophies;
 
@@ -374,7 +338,8 @@ app.post('/api/auth/signup', async (req, res) => {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ message: "Username and password required" });
 
-        const newUser = new GigaUser({ username, password });
+        // FIXED: Changed 'new GigaUser' to 'new SuperUser' to match your model import
+        const newUser = new SuperUser({ username, password });
         await newUser.save();
         
         res.status(201).json({ message: "User created successfully! You can now log in." });
@@ -395,7 +360,6 @@ app.post('/api/auth/signin', async (req, res) => {
         const isMatch = await user.comparePassword(password);
         if (!isMatch) return res.status(401).json({ message: "Invalid password" });
 
-        // Create a token (Use your own secret key from .env later, but this works for now)
         const token = jwt.sign({ id: user._id, username: user.username }, process.env.JWT_SECRET || 'supersecretgigakey', { expiresIn: '1d' });
 
         res.json({ 
@@ -414,11 +378,10 @@ app.post('/api/auth/link-steam', async (req, res) => {
     try {
         const { username, steamId } = req.body;
         
-        // Find the user and update their linkedSteamId
         const updatedUser = await SuperUser.findOneAndUpdate(
             { username: username },
             { linkedSteamId: steamId },
-            { new: true } // Returns the updated document
+            { new: true } 
         );
 
         if (!updatedUser) return res.status(404).json({ message: "User not found" });
@@ -434,13 +397,9 @@ app.get('/api/stats/:steamid', async (req, res) => {
     try {
         const { steamid } = req.params;
 
-        // 1. Count ALL achievements synced for this user
         const totalAchievements = await Achievement.countDocuments({ userId: steamid });
-
-        // 2. Count ONLY the unlocked achievements for this user
         const unlockedAchievements = await Achievement.countDocuments({ userId: steamid, achieved: 1 });
 
-        // 3. Calculate percentage
         let completionRate = 0;
         if (totalAchievements > 0) {
             completionRate = Math.round((unlockedAchievements / totalAchievements) * 100);
@@ -459,10 +418,8 @@ app.get('/api/stats/:steamid', async (req, res) => {
 // --- SOCIAL: COMMUNITY LEADERBOARD ---
 app.get('/api/community/leaderboard', async (req, res) => {
     try {
-        // 1. Find all users who have actually linked a Steam account
         const users = await SuperUser.find({ linkedSteamId: { $ne: null } }, 'username linkedSteamId');
 
-        // 2. Count unlocked achievements for each user
         const leaderboardData = await Promise.all(users.map(async (user) => {
             const unlocked = await Achievement.countDocuments({ 
                 userId: user.linkedSteamId, 
@@ -476,9 +433,7 @@ app.get('/api/community/leaderboard', async (req, res) => {
             };
         }));
 
-        // 3. Sort the array from highest to lowest
         leaderboardData.sort((a, b) => b.unlockedCount - a.unlockedCount);
-
         res.json(leaderboardData);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -491,18 +446,14 @@ app.get('/api/search/players/:query', async (req, res) => {
     const apiKey = process.env.STEAM_API_KEY;
 
     try {
-        // 1. Sanitize the query for MongoDB Regex (prevents crashes from special characters like ' or [)
         const safeQuery = query.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 
-        // 2. Search local MongoDB (Increased limit to 15 to show multiple users with same name)
         const localMatches = await User.find({
             personaname: { $regex: safeQuery, $options: 'i' } 
         }).limit(15);
 
-        // 3. Try to resolve the query as a Steam Vanity URL
         let vanityMatch = null;
         try {
-            // Encode the URI component to safely handle apostrophes in the URL request
             const encodedQuery = encodeURIComponent(query);
             const vanityUrl = `http://api.steampowered.com/ISteamUser/ResolveVanityURL/v0001/?key=${apiKey}&vanityurl=${encodedQuery}`;
             const vanityRes = await axios.get(vanityUrl);
@@ -514,13 +465,11 @@ app.get('/api/search/players/:query', async (req, res) => {
                 vanityMatch = profileRes.data.response.players[0];
             }
         } catch (e) {
-            console.log("Vanity URL lookup failed or not found.");
+            console.log("Vanity URL lookup failed.");
         }
 
-        // 4. Combine results and remove duplicates
         let results = [...localMatches];
         
-        // If we found a Steam Vanity match, and it's NOT already in our local results, add it to the top
         if (vanityMatch) {
             const alreadyInLocal = results.some(r => r.steamId === vanityMatch.steamid);
             if (!alreadyInLocal) {
@@ -528,7 +477,7 @@ app.get('/api/search/players/:query', async (req, res) => {
                     steamId: vanityMatch.steamid,
                     personaname: vanityMatch.personaname,
                     avatar: vanityMatch.avatar,
-                    isNew: true // Flag to show it's fresh from Steam
+                    isNew: true 
                 });
             }
         }
@@ -544,16 +493,12 @@ app.get('/api/stats/playtime/:steamid', async (req, res) => {
     try {
         const { steamid } = req.params;
 
-        // Use the MongoDB Aggregation Pipeline to do all the work in the database
         const result = await Game.aggregate([
-            // Stage 1: Match all games that belong to the user (this is a simplified match for now)
-            // A more advanced version would link Games directly to a User ID
-            // For now, we assume all synced games are for the active user
-            
-            // Stage 2: Group all matched documents and sum their 'playtime_forever' field
+            // FIXED: Added $match stage so we only sum playtime for THIS user, not the whole DB
+            { $match: { userId: steamid } },
             {
                 $group: {
-                    _id: null, // Group all documents into a single result
+                    _id: null, 
                     totalMinutes: { $sum: '$playtime_forever' }
                 }
             }
@@ -563,7 +508,7 @@ app.get('/api/stats/playtime/:steamid', async (req, res) => {
             const totalHours = Math.round(result[0].totalMinutes / 60);
             res.json({ totalHours });
         } else {
-            res.json({ totalHours: 0 }); // If no games are found
+            res.json({ totalHours: 0 }); 
         }
     } catch (error) {
         res.status(500).json({ error: error.message });
