@@ -735,6 +735,67 @@ app.get('/api/library/all/:username', async (req, res) => {
     }
 });
 
+// --- BACKGROUND HYDRATION ROUTE ---
+app.post('/api/hydrate/game-completion', async (req, res) => {
+    try {
+        const { username, game } = req.body;
+        const { platform, userId, platformGameId } = game;
+        
+        let finalAchievements = [];
+
+        if (platform === 'Steam') {
+            const apiKey = process.env.STEAM_API_KEY;
+            const schemaUrl = `http://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?key=${apiKey}&appid=${platformGameId}`;
+            const userStatsUrl = `http://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v0001/?appid=${platformGameId}&key=${apiKey}&steamid=${userId}`;
+
+            const [schemaRes, userRes] = await Promise.all([
+                axios.get(schemaUrl),
+                axios.get(userStatsUrl).catch(() => ({ data: { playerstats: { achievements: [] } } }))
+            ]);
+
+            const available = schemaRes.data?.game?.availableGameStats?.achievements || [];
+            const unlocked = userRes.data?.playerstats?.achievements || [];
+
+            finalAchievements = available.map(schemaAch => ({
+                achieved: unlocked.find(u => u.apiname === schemaAch.name)?.achieved ? 1 : 0
+            }));
+
+        } else if (platform === 'PSN') {
+            const user = await SuperUser.findOne({ username });
+            const token = await getPsnToken(user.psnNpsso);
+            
+            let trophyDefinitions = [];
+            let userProgress = [];
+            try {
+                const res1 = await getTitleTrophies(token, platformGameId, "all", { npServiceName: "trophy" });
+                trophyDefinitions = res1.trophies || [];
+            } catch {
+                const res2 = await getTitleTrophies(token, platformGameId, "all", { npServiceName: "trophy2" });
+                trophyDefinitions = res2.trophies || [];
+            }
+
+            try {
+                const res1 = await getUserTrophiesEarnedForTitle(token, userId, platformGameId, "all", { npServiceName: "trophy" });
+                userProgress = res1.trophies || [];
+            } catch {
+                const res2 = await getUserTrophiesEarnedForTitle(token, userId, platformGameId, "all", { npServiceName: "trophy2" });
+                userProgress = res2.trophies || [];
+            }
+            
+            finalAchievements = trophyDefinitions.map(def => ({
+                achieved: userProgress.find(p => p.trophyId === def.trophyId)?.earned ? 1 : 0
+            }));
+        }
+        
+        // This is the same helper function we wrote before!
+        await updateGameCompletionRate(userId, platformGameId, finalAchievements);
+
+        res.status(200).json({ success: true, message: `Hydrated ${game.name}` });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 
 // ==========================================
 // --- AUTHENTICATION ROUTES ---
