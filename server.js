@@ -192,17 +192,26 @@ app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
     }
 });
 
-// Get all games for a user from MongoDB (so we don't have to hit Steam API again)
+// Get all games for a user from MongoDB (filtered by the active ID being viewed)
 app.get('/api/games/:steamid', async (req, res) => {
     try {
-        // Find the user first
-        const user = await User.findOne({ steamId: req.params.steamid });
-        if (!user) return res.status(404).json({ message: "User not found in database. Try syncing first." });
+        const { steamid } = req.params;
 
-        // Since we didn't strictly link Game to User in the schema earlier, 
-        // for now we will just return all games (we can fix the schema later to be more robust)
-        // UPDATED: Added .sort({ name: 1 }) to sort results alphabetically (A-Z)
-        const games = await Game.find({}).sort({ name: 1 }); 
+        // 1. Verification Check:
+        // We look in our cached 'User' collection (Steam) OR our 'SuperUser' collection (Website Account)
+        // to make sure this is a valid player we have tracked.
+        const user = await User.findOne({ steamId: steamid });
+        
+        // Note: If you are looking up a PSN player, 'user' might be null here if they don't have Steam.
+        // We can add a check for PSN users here later, but for now, we'll keep your Steam check.
+        if (!user && !steamid.startsWith('NP')) { 
+            return res.status(404).json({ message: "User not found in database. Try syncing first." });
+        }
+
+        // 2. The Isolated Query:
+        // Instead of Game.find({}), we filter by 'userId'. 
+        // This ensures if I view 'Alex', I only see 'Alex's' games.
+        const games = await Game.find({ userId: steamid }).sort({ name: 1 }); 
         
         res.json(games);
     } catch (error) {
@@ -274,6 +283,85 @@ app.post('/api/psn/sync/:username', async (req, res) => {
 
         res.json({ message: `Synced ${titles.length} PlayStation games!` });
     } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- UPDATED: SYNC PSN GAMES ---
+app.post('/api/psn/sync/:username', async (req, res) => {
+    try {
+        const user = await SuperUser.findOne({ username: req.params.username });
+        if (!user.psnNpsso) return res.status(400).json({ message: "PSN not linked." });
+
+        const token = await getPsnToken(user.psnNpsso);
+        const response = await getUserTitles(token, "me");
+        const titles = response.trophyTitles || [];
+
+        // Save PSN titles to the Game collection
+        const gamePromises = titles.map(title => {
+            return Game.findOneAndUpdate(
+                { userId: user.psnAccountId, platform: 'PSN', platformGameId: title.npCommunicationId },
+                { 
+                    name: title.trophyTitleName, 
+                    img_icon_url: title.trophyTitleIconUrl,
+                    playtime_forever: 0 // PSN doesn't provide easy playtime metadata here
+                },
+                { upsert: true }
+            );
+        });
+        await Promise.all(gamePromises);
+
+        res.json({ message: `Success! Synced ${titles.length} PlayStation games for ${user.username}.` });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- NEW: SYNC & GET PSN TROPHIES ---
+app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
+    const { username, npId } = req.params;
+
+    try {
+        const user = await SuperUser.findOne({ username });
+        const token = await getPsnToken(user.psnNpsso);
+
+        // 1. Get Trophy Definitions (Names/Icons/Descriptions)
+        const trophyRes = await getTitleTrophies(token, npId, "all");
+        const trophyDefinitions = trophyRes.trophies;
+
+        // 2. Get User Progress (Unlocked status)
+        const progressRes = await getUserTrophiesFromTitle(token, "me", npId, "all");
+        const userProgress = progressRes.trophies;
+
+        // 3. Combine them
+        const finalTrophies = trophyDefinitions.map(def => {
+            const prog = userProgress.find(p => p.trophyId === def.trophyId);
+            return {
+                userId: user.psnAccountId,
+                platform: 'PSN',
+                platformGameId: npId,
+                apiname: def.trophyId.toString(),
+                displayName: def.trophyName,
+                description: def.trophyDetail,
+                iconUrl: def.trophyIconUrl,
+                achieved: prog?.earned ? 1 : 0,
+                unlocktime: prog?.earnedDateTime ? new Date(prog.earnedDateTime).getTime() / 1000 : 0
+            };
+        });
+
+        // 4. Save to Database
+        const trophyPromises = finalTrophies.map(t => {
+            return Achievement.findOneAndUpdate(
+                { userId: t.userId, platform: 'PSN', apiname: t.apiname, platformGameId: npId },
+                t,
+                { upsert: true }
+            );
+        });
+        await Promise.all(trophyPromises);
+
+        res.json(finalTrophies);
+    } catch (error) {
+        console.error(error);
         res.status(500).json({ error: error.message });
     }
 });
