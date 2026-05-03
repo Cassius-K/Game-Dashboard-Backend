@@ -6,7 +6,7 @@ const GameSchema = new mongoose.Schema({
     platformGameId: { type: String, required: true }, // The appid (Steam) or npId (PSN)
     name: String,
     img_icon_url: String,
-    playtime_forever: { type: Number, default: 0 }
+    playtime_forever: { type: Number, default: 0 },
 	completionRate: { type: Number, default: 0 } 
 });
 
