@@ -491,6 +491,31 @@ app.post('/api/auth/link-xbox', async (req, res) => {
     }
 });
 
+// --- TEMPORARY DEBUG ROUTE ---
+app.get('/api/debug/xbox/:query', async (req, res) => {
+    try {
+        const { query } = req.params;
+        const encodedQuery = encodeURIComponent(query);
+        const url = `https://xbl.io/api/v2/search/${encodedQuery}`;
+        
+        const searchRes = await axios.get(url, { headers: getXboxHeaders() });
+        
+        // Send the RAW JSON directly back to your screen
+        res.json({
+            status: "SUCCESS",
+            url_tested: url,
+            raw_data_from_openxbl: searchRes.data
+        });
+    } catch (error) {
+        // If it fails, send the exact error back to your screen
+        res.json({
+            status: "FAILED",
+            error_message: error.message,
+            error_details: error.response ? error.response.data : "No details"
+        });
+    }
+});
+
 // 2. SEARCH XBOX PLAYERS
 app.get('/api/search/xbox/:query', async (req, res) => {
     try {
