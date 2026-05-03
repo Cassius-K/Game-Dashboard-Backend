@@ -333,7 +333,7 @@ app.post('/api/psn/sync/:username/:targetAccountId', async (req, res) => {
     }
 });
 
-// --- UPDATED: GET PSN TROPHIES WITH TARGET ID ---
+// 3. GET PSN TROPHIES (Updated with PS4/PS5 Smart Fallback and Item 3 Values)
 app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, res) => {
     const { username, targetAccountId, npId } = req.params;
 
@@ -341,38 +341,59 @@ app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, re
         const user = await SuperUser.findOne({ username });
         const token = await getPsnToken(user.psnNpsso);
 
-        // 1. Get Trophy Definitions
-        const trophyRes = await getTitleTrophies(token, npId, "all", { npServiceName: "trophy" });
-        const trophyDefinitions = trophyRes.trophies || [];
-
-        // 2. Get User Progress
+        let trophyDefinitions = [];
         let userProgress = [];
+
+        // 1. Get Trophy Definitions (Smart Fallback for PS4 vs PS5)
         try {
-            // Ask Sony for the specific target user's progress
-            const progressRes = await getUserTrophiesEarnedForTitle(token, targetAccountId, npId, "all", { npServiceName: "trophy" });
-            userProgress = progressRes.trophies || [];
-        } catch (e) {
-            console.log(`User ${targetAccountId} progress private or not started for game ${npId}.`);
+            // Try PS3/PS4 format first
+            const trophyRes = await getTitleTrophies(token, npId, "all", { npServiceName: "trophy" });
+            trophyDefinitions = trophyRes.trophies || [];
+        } catch (err) {
+            // If it fails, try PS5 format
+            try {
+                const trophyRes2 = await getTitleTrophies(token, npId, "all", { npServiceName: "trophy2" });
+                trophyDefinitions = trophyRes2.trophies || [];
+            } catch (err2) {
+                return res.json({ error: "Could not fetch trophy definitions from Sony." });
+            }
         }
 
-        // 3. Combine them
-        const finalAchievements = trophyDefinitions.map(def => {
+        // 2. Get User Progress (Smart Fallback)
+        try {
+            const progressRes = await getUserTrophiesEarnedForTitle(token, targetAccountId, npId, "all", { npServiceName: "trophy" });
+            userProgress = progressRes.trophies || [];
+        } catch (err) {
+            try {
+                const progressRes2 = await getUserTrophiesEarnedForTitle(token, targetAccountId, npId, "all", { npServiceName: "trophy2" });
+                userProgress = progressRes2.trophies || [];
+            } catch (err2) {
+                console.log(`User progress private or not started for game ${npId}.`);
+            }
+        }
+
+        // 3. Combine them safely
+        const finalTrophies = trophyDefinitions.map(def => {
             const prog = userProgress.find(p => p.trophyId === def.trophyId);
             return {
-                userId: targetAccountId, 
+                userId: targetAccountId,
                 platform: 'PSN',
                 platformGameId: npId,
                 apiname: def.trophyId.toString(),
                 displayName: def.trophyName,
-                description: def.trophyDetail,
+                description: def.trophyDetail || "Hidden Trophy",
                 iconUrl: def.trophyIconUrl,
                 achieved: prog?.earned ? 1 : 0,
                 unlocktime: prog?.earnedDateTime ? new Date(prog.earnedDateTime).getTime() / 1000 : 0,
-                value: def.trophyType ? def.trophyType.toUpperCase() : "TROPHY" // <--- ADD THIS LINE
+                // ITEM 3 FIX: Add the trophy tier (Bronze, Silver, etc.)
+                value: def.trophyType ? def.trophyType.toUpperCase() : "TROPHY"
             };
         });
 
-        if (finalTrophies.length === 0) return res.json({ error: "No trophies found." });
+        // Safe check to ensure finalTrophies was actually built
+        if (!finalTrophies || finalTrophies.length === 0) {
+            return res.json({ error: "No trophies found for this title." });
+        }
 
         // 4. Save to Database
         const trophyPromises = finalTrophies.map(t => {
@@ -384,6 +405,7 @@ app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, re
         });
         await Promise.all(trophyPromises);
 
+        // 5. Send to Frontend
         res.json(finalTrophies);
     } catch (error) {
         console.error("PSN TROPHY ERROR:", error);
