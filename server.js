@@ -602,10 +602,9 @@ app.post('/api/xbox/sync/:xuid', async (req, res) => {
     }
 });
 
-// 5. GET XBOX ACHIEVEMENTS (Updated to handle 'content' wrapper and specific target XUID)
+// 5. GET XBOX ACHIEVEMENTS (Updated for Xbox 360 Formatting)
 app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
     try {
-        // FIXED: Now expecting targetXuid from the URL
         const { targetXuid, titleId } = req.params; 
         const url = `https://xbl.io/api/v2/achievements/player/${targetXuid}/title/${titleId}`;
         
@@ -613,7 +612,6 @@ app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
         try {
             achRes = await axios.get(url, { headers: getXboxHeaders() });
         } catch (e) {
-            console.error(`Xbox API rejected stats for user ${targetXuid} on game ${titleId}.`);
             return res.json({ error: "Game stats are private or no achievements exist." });
         }
 
@@ -628,17 +626,26 @@ app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
         }
 
         const finalAchievements = achievements.map(ach => {
-            const isUnlocked = ach.progressState === "Achieved";
+            // FIX 1: Handle both Xbox One (progressState) and Xbox 360 (unlocked / unlockedOnline) formats
+            const isUnlocked = ach.progressState === "Achieved" || ach.unlocked === true || ach.unlockedOnline === true;
+            
+            // FIX 2: Handle both time formats
+            const unlockTimeRaw = ach.progression?.timeUnlocked || ach.timeUnlocked;
+            const finalUnlockTime = (isUnlocked && unlockTimeRaw) ? new Date(unlockTimeRaw).getTime() / 1000 : 0;
+
+            // FIX 3: Handle both icon formats
+            const iconUrl = (ach.mediaAssets && ach.mediaAssets[0]) ? ach.mediaAssets[0].url : (ach.imageUnlocked || ach.lockedImage || "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f9/Xbox_one_logo.svg/1024px-Xbox_one_logo.svg.png");
+
             return {
-                userId: targetXuid, // FIXED: Save under the correct target user's ID
+                userId: targetXuid, 
                 platform: 'Xbox',
                 platformGameId: titleId,
                 apiname: ach.id.toString(),
                 displayName: ach.name,
                 description: ach.lockedDescription || ach.description || "Hidden Achievement",
-                iconUrl: ach.mediaAssets && ach.mediaAssets[0] ? ach.mediaAssets[0].url : "",
+                iconUrl: iconUrl,
                 achieved: isUnlocked ? 1 : 0,
-                unlocktime: isUnlocked && ach.progression?.timeUnlocked ? new Date(ach.progression.timeUnlocked).getTime() / 1000 : 0
+                unlocktime: finalUnlockTime
             };
         });
 
