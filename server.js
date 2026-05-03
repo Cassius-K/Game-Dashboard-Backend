@@ -588,27 +588,6 @@ app.post('/api/xbox/sync/:xuid', async (req, res) => {
     }
 });
 
-// --- TEMPORARY DEBUG ROUTE: XBOX ACHIEVEMENTS ---
-app.get('/api/debug/xbox-achievements/:xuid/:titleId', async (req, res) => {
-    try {
-        const { xuid, titleId } = req.params;
-        const url = `https://xbl.io/api/v2/achievements/player/${xuid}/title/${titleId}`;
-        
-        const achRes = await axios.get(url, { headers: getXboxHeaders() });
-        
-        res.json({
-            status: "SUCCESS",
-            raw_data: achRes.data
-        });
-    } catch (error) {
-        res.json({
-            status: "FAILED",
-            error_message: error.message,
-            error_details: error.response ? error.response.data : "No details"
-        });
-    }
-});
-
 // 5. GET XBOX ACHIEVEMENTS (Updated to handle 'content' wrapper and detect privacy walls)
 app.get('/api/xbox/achievements/:xuid/:titleId', async (req, res) => {
     try {
@@ -628,7 +607,10 @@ app.get('/api/xbox/achievements/:xuid/:titleId', async (req, res) => {
         const achievements = responseData.achievements || [];
 
         if (achievements.length === 0) {
-            return res.json({ error: "No achievements found for this title." });
+            return res.json({ 
+                error: "Modern API Restriction",
+                details: "Xbox One and Series X|S achievements require direct Microsoft Azure OAuth authentication and cannot be pulled via the public OpenXBL proxy. Only Xbox 360 titles are supported in Public View."
+            });
         }
 
         const finalAchievements = achievements.map(ach => {
