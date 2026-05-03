@@ -448,16 +448,21 @@ const getXboxHeaders = () => {
     };
 };
 
-// NEW: Bulletproof helper to extract the player array from OpenXBL, regardless of what they name it
+// NEW: Bulletproof helper to extract the player array from OpenXBL
 function extractXboxPlayers(data) {
-    if (Array.isArray(data)) return data;
-    if (Array.isArray(data.people)) return data.people;
-    if (Array.isArray(data.users)) return data.users;
-    if (Array.isArray(data.profileUsers)) return data.profileUsers;
+    if (!data) return [];
     
-    // If they changed the name again, just find whatever array is in the object
-    for (let key in data) {
-        if (Array.isArray(data[key])) return data[key];
+    // Sometimes it's wrapped in 'content'
+    const targetData = data.content ? data.content : data;
+
+    if (Array.isArray(targetData)) return targetData;
+    if (Array.isArray(targetData.people)) return targetData.people;
+    if (Array.isArray(targetData.users)) return targetData.users;
+    if (Array.isArray(targetData.profileUsers)) return targetData.profileUsers;
+    
+    // Fallback: look for ANY array inside the object
+    for (let key in targetData) {
+        if (Array.isArray(targetData[key])) return targetData[key];
     }
     return [];
 }
