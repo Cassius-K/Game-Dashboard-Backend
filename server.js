@@ -15,7 +15,6 @@ const {
     getUserTitlesLog,
     getUserTrophiesFromTitle,
     getTitleTrophies,
-    // NEW: Added imports for the advanced PSN features
     getProfileFromUserName,
     getUserTrophyProfileSummary,
     makeUniversalSearch
@@ -275,21 +274,24 @@ app.post('/api/auth/link-psn', async (req, res) => {
     }
 });
 
-// 2. SYNC PSN GAMES 
-// (Removed your duplicate version of this route so it doesn't conflict)
-app.post('/api/psn/sync/:username', async (req, res) => {
+// 2. SYNC PSN GAMES (Updated to allow syncing ANY public PSN account)
+app.post('/api/psn/sync/:username/:accountId', async (req, res) => {
     try {
-        const user = await SuperUser.findOne({ username: req.params.username });
+        const { username, accountId } = req.params;
+        
+        const user = await SuperUser.findOne({ username: username });
         if (!user.psnNpsso) return res.status(400).json({ message: "PSN not linked." });
 
         const token = await getPsnToken(user.psnNpsso);
-        const response = await getUserTitles(token, "me");
+        
+        // FIXED: Replaced "me" with the target accountId so we can sync friends/searched players
+        const response = await getUserTitles(token, accountId);
         const titles = response.trophyTitles || [];
 
         // Save PSN titles to the Game collection
         const gamePromises = titles.map(title => {
             return Game.findOneAndUpdate(
-                { userId: user.psnAccountId, platform: 'PSN', platformGameId: title.npCommunicationId },
+                { userId: accountId, platform: 'PSN', platformGameId: title.npCommunicationId },
                 { 
                     name: title.trophyTitleName, 
                     img_icon_url: title.trophyTitleIconUrl,
@@ -300,7 +302,7 @@ app.post('/api/psn/sync/:username', async (req, res) => {
         });
         await Promise.all(gamePromises);
 
-        res.json({ message: `Success! Synced ${titles.length} PlayStation games for ${user.username}.` });
+        res.json({ message: `Success! Synced ${titles.length} PlayStation games.` });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
