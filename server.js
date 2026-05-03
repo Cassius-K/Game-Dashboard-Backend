@@ -176,7 +176,12 @@ app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
         // 4. Save this specific user's progress to MongoDB
         const achievementPromises = finalAchievements.map(ach => {
             return Achievement.findOneAndUpdate(
-                { userId: steamid, appid: appid, apiname: ach.apiname },
+                { 
+                    userId: steamid, 
+                    platformGameId: appid, // Changed from appid to platformGameId
+                    platform: 'Steam',      // Added platform
+                    apiname: ach.apiname 
+                },
                 { 
                     achieved: ach.achieved, 
                     unlocktime: ach.unlocktime, 
