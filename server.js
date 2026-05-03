@@ -443,12 +443,11 @@ const getXboxHeaders = () => {
     const key = process.env.XBOX_API_KEY;
     if (!key) console.error("WARNING: XBOX_API_KEY is not set in environment variables!");
     
+    // Return just the headers object, not wrapped in another object
     return {
-        headers: {
-            'X-Authorization': key,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-        }
+        'X-Authorization': key,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
     };
 };
 
@@ -457,8 +456,11 @@ app.post('/api/auth/link-xbox', async (req, res) => {
     try {
         const { username, gamertag } = req.body;
 
-        // Search OpenXBL to get the XUID for this Gamertag
-        const searchRes = await axios.get(`https://xbl.io/api/v2/search/${gamertag}`, getXboxHeaders());
+        const encodedQuery = encodeURIComponent(gamertag);
+        const url = `https://xbl.io/api/v2/search/${encodedQuery}`;
+        
+        // GET request: URL is arg 1, Config { headers } is arg 2
+        const searchRes = await axios.get(url, { headers: getXboxHeaders() });
         
         if (!searchRes.data.people || searchRes.data.people.length === 0) {
             return res.status(404).json({ message: "Gamertag not found." });
@@ -467,7 +469,6 @@ app.post('/api/auth/link-xbox', async (req, res) => {
         const xuid = searchRes.data.people[0].xuid;
         const realGamertag = searchRes.data.people[0].gamertag;
 
-        // Save to DB
         const updatedUser = await SuperUser.findOneAndUpdate(
             { username: username },
             { linkedXboxXuid: xuid, xboxGamertag: realGamertag },
@@ -476,7 +477,7 @@ app.post('/api/auth/link-xbox', async (req, res) => {
 
         res.json({ message: "Xbox account linked successfully!", xuid: xuid, gamertag: realGamertag });
     } catch (error) {
-        console.error(error);
+        console.error(error.response ? error.response.data : error.message);
         res.status(500).json({ message: "Failed to link Xbox account. Check API key." });
     }
 });
@@ -485,14 +486,11 @@ app.post('/api/auth/link-xbox', async (req, res) => {
 app.get('/api/search/xbox/:query', async (req, res) => {
     try {
         const { query } = req.params;
-        
-        // CRITICAL: Encode the gamertag in case it has spaces (e.g., "Major Nelson")
         const encodedQuery = encodeURIComponent(query);
-        
         const url = `https://xbl.io/api/v2/search/${encodedQuery}`;
-        console.log(`Sending Xbox Search request to: ${url}`); // Add this to check your logs
-
-        const searchRes = await axios.get(url, getXboxHeaders());
+        
+        // GET request
+        const searchRes = await axios.get(url, { headers: getXboxHeaders() });
         
         const matches = searchRes.data.people || [];
         const formattedResults = matches.map(p => ({
@@ -504,8 +502,6 @@ app.get('/api/search/xbox/:query', async (req, res) => {
         res.json(formattedResults);
     } catch (error) {
         console.error("XBOX SEARCH ERROR:", error.response ? error.response.data : error.message);
-        
-        // Provide a clearer error message to the frontend
         if (error.response && error.response.status === 401) {
             return res.status(500).json({ error: "OpenXBL API Key is invalid or expired." });
         }
@@ -517,7 +513,10 @@ app.get('/api/search/xbox/:query', async (req, res) => {
 app.get('/api/xbox/profile/:xuid', async (req, res) => {
     try {
         const { xuid } = req.params;
-        const profileRes = await axios.get(`https://xbl.io/api/v2/player/summary/${xuid}`, getXboxHeaders());
+        const url = `https://xbl.io/api/v2/player/summary/${xuid}`;
+        
+        // GET request
+        const profileRes = await axios.get(url, { headers: getXboxHeaders() });
         const p = profileRes.data.people[0];
 
         res.json({
@@ -525,7 +524,7 @@ app.get('/api/xbox/profile/:xuid', async (req, res) => {
             xuid: p.xuid,
             avatar: p.displayPicRaw,
             gamerscore: p.gamerScore,
-            presence: p.presenceState // 'Online' or 'Offline'
+            presence: p.presenceState
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -536,19 +535,19 @@ app.get('/api/xbox/profile/:xuid', async (req, res) => {
 app.post('/api/xbox/sync/:xuid', async (req, res) => {
     try {
         const { xuid } = req.params;
+        const url = `https://xbl.io/api/v2/achievements/player/${xuid}`;
         
-        // Fetch recently played titles / achievement history
-        const gamesRes = await axios.get(`https://xbl.io/api/v2/achievements/player/${xuid}`, getXboxHeaders());
+        // GET request
+        const gamesRes = await axios.get(url, { headers: getXboxHeaders() });
         const titles = gamesRes.data.titles || [];
 
-        // Save to Database
         const gamePromises = titles.map(title => {
             return Game.findOneAndUpdate(
                 { userId: xuid, platform: 'Xbox', platformGameId: title.titleId.toString() },
                 { 
                     name: title.name, 
                     img_icon_url: title.displayImage, 
-                    playtime_forever: 0 // Xbox provides playtime in a different format, default to 0 for now
+                    playtime_forever: 0 
                 },
                 { upsert: true }
             );
@@ -565,7 +564,10 @@ app.post('/api/xbox/sync/:xuid', async (req, res) => {
 app.get('/api/xbox/achievements/:xuid/:titleId', async (req, res) => {
     try {
         const { xuid, titleId } = req.params;
-        const achRes = await axios.get(`https://xbl.io/api/v2/achievements/player/${xuid}/title/${titleId}`, getXboxHeaders());
+        const url = `https://xbl.io/api/v2/achievements/player/${xuid}/title/${titleId}`;
+        
+        // GET request
+        const achRes = await axios.get(url, { headers: getXboxHeaders() });
         const achievements = achRes.data.achievements || [];
 
         if (achievements.length === 0) return res.json({ error: "No achievements found." });
