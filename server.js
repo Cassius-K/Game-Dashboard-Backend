@@ -53,12 +53,26 @@ app.get('/api/steam/profile/:steamid', async (req, res) => {
     const apiKey = process.env.STEAM_API_KEY;
 
     try {
-        // Get Basic Profile Info
-        const url = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${apiKey}&steamids=${steamid}`;
-        const response = await axios.get(url);
+        // 1. Get Basic Profile Info
+        const profileUrl = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${apiKey}&steamids=${steamid}`;
         
-        if (response.data.response.players.length > 0) {
-            res.json(response.data.response.players[0]);
+        // 2. Get Steam Level
+        const levelUrl = `http://api.steampowered.com/IPlayerService/GetSteamLevel/v1/?key=${apiKey}&steamid=${steamid}`;
+        
+        // Fetch both at the exact same time using Promise.all
+        const [profileRes, levelRes] = await Promise.all([
+            axios.get(profileUrl),
+            // If the profile is private, the Level API throws an error. We catch it and default to Level 0.
+            axios.get(levelUrl).catch(() => ({ data: { response: { player_level: "Hidden" } } })) 
+        ]);
+        
+        if (profileRes.data.response.players.length > 0) {
+            const player = profileRes.data.response.players[0];
+            
+            // Inject the steam level into the player object before sending it to React
+            player.steamLevel = levelRes.data.response.player_level; 
+            
+            res.json(player);
         } else {
             res.status(404).json({ message: "Player not found" });
         }
