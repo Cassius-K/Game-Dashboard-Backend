@@ -15,6 +15,7 @@ const {
     getUserTitlesLog,
     getUserTrophiesFromTitle,
     getTitleTrophies,
+	getUserTrophiesEarnedForTitle,
     getProfileFromUserName,
     getUserTrophyProfileSummary,
     makeUniversalSearch
@@ -317,7 +318,7 @@ app.post('/api/psn/sync/:username/:accountId', async (req, res) => {
     }
 });
 
-// 3. GET PSN TROPHIES
+// 3. GET PSN TROPHIES (Updated to use correct psn-api functions)
 app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
     const { username, npId } = req.params;
 
@@ -325,15 +326,24 @@ app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
         const user = await SuperUser.findOne({ username });
         const token = await getPsnToken(user.psnNpsso);
 
-        // 1. Get Trophy Definitions
-        const trophyRes = await getTitleTrophies(token, npId, "all");
-        const trophyDefinitions = trophyRes.trophies;
+        // 1. Get Trophy Definitions (The "Dictionary" of what the trophies are)
+        // 'npServiceName' is usually "trophy" for PS4/PS5
+        const trophyRes = await getTitleTrophies(token, npId, "all", { npServiceName: "trophy" });
+        const trophyDefinitions = trophyRes.trophies || [];
 
-        // 2. Get User Progress
-        const progressRes = await getUserTrophiesFromTitle(token, "me", npId, "all");
-        const userProgress = progressRes.trophies;
+        // 2. Get User Progress (Which ones did they actually unlock?)
+        let userProgress = [];
+        try {
+            // Note: The second parameter is 'accountId'. 
+            // We use 'me' if we want the logged-in user, but to make this work for searched players too, 
+            // we should technically pass the target's accountId. For now, we will assume "me".
+            const progressRes = await getUserTrophiesEarnedForTitle(token, "me", npId, "all", { npServiceName: "trophy" });
+            userProgress = progressRes.trophies || [];
+        } catch (e) {
+            console.log("User progress private or not started for this game.");
+        }
 
-        // 3. Combine them
+        // 3. Combine the Definition with the Progress
         const finalTrophies = trophyDefinitions.map(def => {
             const prog = userProgress.find(p => p.trophyId === def.trophyId);
             return {
@@ -345,9 +355,14 @@ app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
                 description: def.trophyDetail,
                 iconUrl: def.trophyIconUrl,
                 achieved: prog?.earned ? 1 : 0,
+                // PSN sometimes doesn't send exact dates if hidden, so we fallback to 0
                 unlocktime: prog?.earnedDateTime ? new Date(prog.earnedDateTime).getTime() / 1000 : 0
             };
         });
+
+        if (finalTrophies.length === 0) {
+            return res.json({ error: "No trophies found for this game format." });
+        }
 
         // 4. Save to Database
         const trophyPromises = finalTrophies.map(t => {
@@ -361,7 +376,7 @@ app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
 
         res.json(finalTrophies);
     } catch (error) {
-        console.error(error);
+        console.error("PSN TROPHY ERROR:", error);
         res.status(500).json({ error: error.message });
     }
 });
