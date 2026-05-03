@@ -8,7 +8,7 @@ const AchievementSchema = new mongoose.Schema({
     description: String,
     iconUrl: String,
     achieved: Number,
-    unlocktime: Number
+    unlocktime: Number,
 	value: String
 });
 module.exports = mongoose.model('Achievement', AchievementSchema);
