@@ -489,16 +489,15 @@ app.get('/api/search/xbox/:query', async (req, res) => {
         const encodedQuery = encodeURIComponent(query);
         const url = `https://xbl.io/api/v2/search/${encodedQuery}`;
         
-        // GET request
         const searchRes = await axios.get(url, { headers: getXboxHeaders() });
-		
-		console.log("RAW XBOX DATA:", JSON.stringify(searchRes.data, null, 2));
         
+        // Safely extract the 'people' array from the response
         const matches = searchRes.data.people || [];
-        // Extract the best available data from the OpenXBL response
+        
+        // Map it so the frontend always gets the same clean object structure
         const formattedResults = matches.map(p => ({
             xuid: p.xuid,
-            // Use uniqueModernGamertag if it exists (handles the new Discord-style # numbers), otherwise fallback to gamertag
+            // Prefer the uniqueModernGamertag (handles duplicate names with # numbers)
             gamertag: p.uniqueModernGamertag || p.gamertag,
             avatar: p.displayPicRaw
         }));
