@@ -495,9 +495,11 @@ app.get('/api/search/xbox/:query', async (req, res) => {
 		console.log("RAW XBOX DATA:", JSON.stringify(searchRes.data, null, 2));
         
         const matches = searchRes.data.people || [];
+        // Extract the best available data from the OpenXBL response
         const formattedResults = matches.map(p => ({
             xuid: p.xuid,
-            gamertag: p.gamertag,
+            // Use uniqueModernGamertag if it exists (handles the new Discord-style # numbers), otherwise fallback to gamertag
+            gamertag: p.uniqueModernGamertag || p.gamertag,
             avatar: p.displayPicRaw
         }));
 
