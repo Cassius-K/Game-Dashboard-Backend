@@ -189,9 +189,8 @@ app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
         // 3. Combine the data so we know the names, icons, AND unlock status
         const finalAchievements = availableAchievements.map(schemaAch => {
             const userAch = userUnlocked.find(u => u.apiname === schemaAch.name);
-            
             return {
-                userId: steamid, // Ensure we tag this trophy to the specific user
+                userId: steamid, 
                 platform: 'Steam',
                 platformGameId: appid,
                 apiname: schemaAch.name,
@@ -199,7 +198,8 @@ app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
                 description: schemaAch.description,
                 iconUrl: userAch?.achieved ? schemaAch.icon : schemaAch.icongray, 
                 achieved: userAch ? userAch.achieved : 0,
-                unlocktime: userAch ? userAch.unlocktime : 0
+                unlocktime: userAch ? userAch.unlocktime : 0,
+                value: "Steam" // <--- ADD THIS LINE
             };
         });
 
@@ -356,10 +356,10 @@ app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, re
         }
 
         // 3. Combine them
-        const finalTrophies = trophyDefinitions.map(def => {
+        const finalAchievements = trophyDefinitions.map(def => {
             const prog = userProgress.find(p => p.trophyId === def.trophyId);
             return {
-                userId: targetAccountId, // Save it under the target user's ID
+                userId: targetAccountId, 
                 platform: 'PSN',
                 platformGameId: npId,
                 apiname: def.trophyId.toString(),
@@ -367,7 +367,8 @@ app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, re
                 description: def.trophyDetail,
                 iconUrl: def.trophyIconUrl,
                 achieved: prog?.earned ? 1 : 0,
-                unlocktime: prog?.earnedDateTime ? new Date(prog.earnedDateTime).getTime() / 1000 : 0
+                unlocktime: prog?.earnedDateTime ? new Date(prog.earnedDateTime).getTime() / 1000 : 0,
+                value: def.trophyType ? def.trophyType.toUpperCase() : "TROPHY" // <--- ADD THIS LINE
             };
         });
 
@@ -630,14 +631,9 @@ app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
         }
 
         const finalAchievements = achievements.map(ach => {
-            // FIX 1: Handle both Xbox One (progressState) and Xbox 360 (unlocked / unlockedOnline) formats
             const isUnlocked = ach.progressState === "Achieved" || ach.unlocked === true || ach.unlockedOnline === true;
-            
-            // FIX 2: Handle both time formats
             const unlockTimeRaw = ach.progression?.timeUnlocked || ach.timeUnlocked;
             const finalUnlockTime = (isUnlocked && unlockTimeRaw) ? new Date(unlockTimeRaw).getTime() / 1000 : 0;
-
-            // FIX 3: Handle both icon formats
             const iconUrl = (ach.mediaAssets && ach.mediaAssets[0]) ? ach.mediaAssets[0].url : (ach.imageUnlocked || ach.lockedImage || "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f9/Xbox_one_logo.svg/1024px-Xbox_one_logo.svg.png");
 
             return {
@@ -649,7 +645,8 @@ app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
                 description: ach.lockedDescription || ach.description || "Hidden Achievement",
                 iconUrl: iconUrl,
                 achieved: isUnlocked ? 1 : 0,
-                unlocktime: finalUnlockTime
+                unlocktime: finalUnlockTime,
+                value: ach.gamerscore ? `${ach.gamerscore}G` : "0G" // <--- ADD THIS LINE
             };
         });
 
