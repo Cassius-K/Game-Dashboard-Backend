@@ -285,27 +285,27 @@ app.post('/api/auth/link-psn', async (req, res) => {
 });
 
 // 2. SYNC PSN GAMES (Updated to allow syncing ANY public PSN account)
-app.post('/api/psn/sync/:username/:accountId', async (req, res) => {
+app.post('/api/psn/sync/:username/:targetAccountId', async (req, res) => {
     try {
-        const { username, accountId } = req.params;
+        const { username, targetAccountId } = req.params; // Get the target ID from the URL
         
         const user = await SuperUser.findOne({ username: username });
         if (!user.psnNpsso) return res.status(400).json({ message: "PSN not linked." });
 
         const token = await getPsnToken(user.psnNpsso);
         
-        // FIXED: Replaced "me" with the target accountId so we can sync friends/searched players
-        const response = await getUserTitles(token, accountId);
+        // FIXED: Replaced "me" with the targetAccountId so we sync friends
+        const response = await getUserTitles(token, targetAccountId);
         const titles = response.trophyTitles || [];
 
-        // Save PSN titles to the Game collection
+        // Save PSN titles to the Game collection under the TARGET'S ID
         const gamePromises = titles.map(title => {
             return Game.findOneAndUpdate(
-                { userId: accountId, platform: 'PSN', platformGameId: title.npCommunicationId },
+                { userId: targetAccountId, platform: 'PSN', platformGameId: title.npCommunicationId },
                 { 
                     name: title.trophyTitleName, 
                     img_icon_url: title.trophyTitleIconUrl,
-                    playtime_forever: 0 // PSN doesn't provide easy playtime metadata here
+                    playtime_forever: 0 
                 },
                 { upsert: true }
             );
@@ -318,36 +318,33 @@ app.post('/api/psn/sync/:username/:accountId', async (req, res) => {
     }
 });
 
-// 3. GET PSN TROPHIES (Updated to use correct psn-api functions)
-app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
-    const { username, npId } = req.params;
+// 3. GET PSN TROPHIES (Updated to fetch specific user's progress)
+app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, res) => {
+    const { username, targetAccountId, npId } = req.params;
 
     try {
         const user = await SuperUser.findOne({ username });
         const token = await getPsnToken(user.psnNpsso);
 
-        // 1. Get Trophy Definitions (The "Dictionary" of what the trophies are)
-        // 'npServiceName' is usually "trophy" for PS4/PS5
+        // 1. Get Trophy Definitions
         const trophyRes = await getTitleTrophies(token, npId, "all", { npServiceName: "trophy" });
         const trophyDefinitions = trophyRes.trophies || [];
 
-        // 2. Get User Progress (Which ones did they actually unlock?)
+        // 2. Get User Progress
         let userProgress = [];
         try {
-            // Note: The second parameter is 'accountId'. 
-            // We use 'me' if we want the logged-in user, but to make this work for searched players too, 
-            // we should technically pass the target's accountId. For now, we will assume "me".
-            const progressRes = await getUserTrophiesEarnedForTitle(token, "me", npId, "all", { npServiceName: "trophy" });
+            // FIXED: We now pass `targetAccountId` instead of "me"
+            const progressRes = await getUserTrophiesEarnedForTitle(token, targetAccountId, npId, "all", { npServiceName: "trophy" });
             userProgress = progressRes.trophies || [];
         } catch (e) {
-            console.log("User progress private or not started for this game.");
+            console.log(`User ${targetAccountId} progress private or not started for game ${npId}.`);
         }
 
-        // 3. Combine the Definition with the Progress
+        // 3. Combine them
         const finalTrophies = trophyDefinitions.map(def => {
             const prog = userProgress.find(p => p.trophyId === def.trophyId);
             return {
-                userId: user.psnAccountId,
+                userId: targetAccountId, // FIXED: Save it under the target user's ID
                 platform: 'PSN',
                 platformGameId: npId,
                 apiname: def.trophyId.toString(),
@@ -355,14 +352,11 @@ app.get('/api/psn/achievements/:username/:npId', async (req, res) => {
                 description: def.trophyDetail,
                 iconUrl: def.trophyIconUrl,
                 achieved: prog?.earned ? 1 : 0,
-                // PSN sometimes doesn't send exact dates if hidden, so we fallback to 0
                 unlocktime: prog?.earnedDateTime ? new Date(prog.earnedDateTime).getTime() / 1000 : 0
             };
         });
 
-        if (finalTrophies.length === 0) {
-            return res.json({ error: "No trophies found for this game format." });
-        }
+        if (finalTrophies.length === 0) return res.json({ error: "No trophies found." });
 
         // 4. Save to Database
         const trophyPromises = finalTrophies.map(t => {
