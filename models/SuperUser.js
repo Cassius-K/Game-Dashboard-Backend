@@ -4,7 +4,18 @@ const bcrypt = require('bcryptjs');
 const SuperUserSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-    linkedSteamId: { type: String, default: null } // We will link their Steam ID here later!
+    
+    // Steam Data
+    linkedSteamId: { type: String, default: null },
+
+    // Xbox Data (NEW)
+    linkedXboxXuid: { type: String, default: null }, // Xbox uses a 'XUID' (User ID)
+    xboxGamertag: { type: String, default: null },
+
+    // PlayStation Data (NEW)
+    linkedPsnId: { type: String, default: null }, // Their online name (e.g. 'PlayerOne')
+    psnAccountId: { type: String, default: null }, // Sony's internal ID
+    psnNpsso: { type: String, default: null } // The token used to refresh access
 });
 
 // Hash password before saving

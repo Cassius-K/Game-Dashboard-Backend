@@ -1,9 +1,13 @@
 const mongoose = require('mongoose');
 const AchievementSchema = new mongoose.Schema({
-    userId: String, // Link to SteamID
-    appid: Number,  // Link to Game
-    apiname: String,
-    achieved: Number, // 1 for yes, 0 for no
+    userId: String,
+    platform: String,
+    platformGameId: String,
+    apiname: String, // unique ID for the trophy
+    displayName: String,
+    description: String,
+    iconUrl: String,
+    achieved: Number,
     unlocktime: Number
 });
 module.exports = mongoose.model('Achievement', AchievementSchema);

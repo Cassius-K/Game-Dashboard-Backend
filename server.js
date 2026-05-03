@@ -7,6 +7,14 @@ const Game = require('./models/Game');
 const Achievement = require('./models/Achievement');
 const jwt = require('jsonwebtoken');
 const SuperUser = require('./models/SuperUser');
+const { 
+    exchangeNpssoForCode, 
+    exchangeCodeForAccessToken, 
+    getUserTitles, 
+    getUserTitlesLog,
+    getUserTrophiesFromTitle,
+    getTitleTrophies
+} = require("psn-api");
 
 const app = express();
 app.use(cors());
@@ -16,6 +24,12 @@ app.use(express.json());
 app.get('/api/status', (req, res) => {
     res.json({ message: "Giga Dashboard Backend is live and ready!" });
 });
+
+// Helper function to get a fresh PSN Access Token using stored npsso
+async function getPsnToken(npsso) {
+    const accessCode = await exchangeNpssoForCode(npsso);
+    return await exchangeCodeForAccessToken(accessCode);
+}
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI)
@@ -203,6 +217,62 @@ app.get('/api/achievements/:steamid/:appid', async (req, res) => {
         // Find all achievements matching this user and this game
         const achievements = await Achievement.find({ userId: steamid, appid: appid });
         res.json(achievements);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 1. LINK PSN ACCOUNT
+app.post('/api/auth/link-psn', async (req, res) => {
+    try {
+        const { username, npsso } = req.body;
+        
+        // Test the npsso and get user info
+        const token = await getPsnToken(npsso);
+        
+        // Update user in DB
+        const updatedUser = await SuperUser.findOneAndUpdate(
+            { username: username },
+            { 
+                psnNpsso: npsso,
+                psnAccountId: token.accountId, // Sony's internal ID
+                linkedPsnId: "Linked" // We'll update the actual name during sync
+            },
+            { new: true }
+        );
+
+        res.json({ message: "PlayStation account linked successfully!", accountId: token.accountId });
+    } catch (error) {
+        res.status(500).json({ message: "Invalid npsso token or Sony error." });
+    }
+});
+
+// 2. SYNC PSN GAMES
+app.post('/api/psn/sync/:username', async (req, res) => {
+    try {
+        const user = await SuperUser.findOne({ username: req.params.username });
+        if (!user.psnNpsso) return res.status(400).json({ message: "PSN not linked." });
+
+        const token = await getPsnToken(user.psnNpsso);
+        
+        // Get list of games played on PSN
+        const response = await getUserTitles(token, "me");
+        const titles = response.trophyTitles || [];
+
+        const gamePromises = titles.map(title => {
+            return Game.findOneAndUpdate(
+                { userId: user.psnAccountId, platform: 'PSN', platformGameId: title.npCommunicationId },
+                { 
+                    name: title.trophyTitleName, 
+                    img_icon_url: title.trophyTitleIconUrl,
+                    playtime_forever: 0 // PSN API doesn't easily provide playtime
+                },
+                { upsert: true }
+            );
+        });
+        await Promise.all(gamePromises);
+
+        res.json({ message: `Synced ${titles.length} PlayStation games!` });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
