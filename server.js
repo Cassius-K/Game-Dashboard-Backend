@@ -100,22 +100,27 @@ app.post('/api/steam/sync/:steamid', async (req, res) => {
         // 4. Update or Insert the valid games
         const gamePromises = validGames.map(game => {
             return Game.findOneAndUpdate(
-                // UPDATED: Added userId and platform to the find criteria
-                { appid: game.appid, userId: steamid, platform: 'Steam' },
-                { name: game.name, img_icon_url: game.img_icon_url, playtime_forever: game.playtime_forever },
+                // FIXED: Changed 'appid' to 'platformGameId' to match the new schema
+                // We convert game.appid to a string to keep it consistent with PSN IDs
+                { platformGameId: game.appid.toString(), userId: steamid, platform: 'Steam' },
+                { 
+                    name: game.name, 
+                    img_icon_url: game.img_icon_url, 
+                    playtime_forever: game.playtime_forever 
+                },
                 { upsert: true }
             );
         });
         await Promise.all(gamePromises);
 
         // 5. THE CLEANUP: Delete "Private" or "Removed" games
-        const validAppIds = validGames.map(g => g.appid);
+        const validAppIds = validGames.map(g => g.appid.toString());
 
-        // FIXED: Added userId filter so we only delete THIS user's orphaned games, not everyone's
+        // FIXED: Changed 'appid' to 'platformGameId'
         const deleteResult = await Game.deleteMany({ 
             userId: steamid,
             platform: 'Steam',
-            appid: { $nin: validAppIds } 
+            platformGameId: { $nin: validAppIds } 
         });
 
         res.json({ 
