@@ -43,6 +43,21 @@ async function getValidPsnToken(username) {
     return await getPsnToken(user.psnNpsso);
 }
 
+// Helper to calculate and save a game's completion percentage
+async function updateGameCompletionRate(userId, platformGameId, finalAchievements) {
+    if (!finalAchievements || finalAchievements.length === 0) return;
+
+    const total = finalAchievements.length;
+    const unlocked = finalAchievements.filter(a => a.achieved === 1).length;
+    const completionRate = Math.round((unlocked / total) * 100);
+
+    // Update the Game record in the database
+    await Game.findOneAndUpdate(
+        { userId: userId, platformGameId: platformGameId },
+        { completionRate: completionRate }
+    );
+}
+
 // Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log("Connected to MongoDB Atlas"))
@@ -217,6 +232,8 @@ app.get('/api/steam/achievements/:steamid/:appid', async (req, res) => {
             );
         });
         await Promise.all(achievementPromises);
+		
+		await updateGameCompletionRate(steamid, appid, finalAchievements);
 
         // 5. Send data back to the frontend (including the privacy flag)
         res.json({ message: "Success", isPrivate: isPrivate, achievements: finalAchievements });
@@ -404,6 +421,8 @@ app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, re
             );
         });
         await Promise.all(trophyPromises);
+		
+		await updateGameCompletionRate(targetAccountId, npId, finalAchievements);
 
         // 5. Send to Frontend
         res.json(finalTrophies);
@@ -680,6 +699,8 @@ app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
             );
         });
         await Promise.all(achievementPromises);
+		
+		await updateGameCompletionRate(xuid, titleId, finalAchievements);
 
         res.json(finalAchievements);
     } catch (error) {
