@@ -422,7 +422,7 @@ app.get('/api/psn/achievements/:username/:targetAccountId/:npId', async (req, re
         });
         await Promise.all(trophyPromises);
 		
-		await updateGameCompletionRate(targetAccountId, npId, finalAchievements);
+		await updateGameCompletionRate(targetAccountId, npId, finalTrophies);
 
         // 5. Send to Frontend
         res.json(finalTrophies);
@@ -700,7 +700,7 @@ app.get('/api/xbox/achievements/:targetXuid/:titleId', async (req, res) => {
         });
         await Promise.all(achievementPromises);
 		
-		await updateGameCompletionRate(xuid, titleId, finalAchievements);
+		await updateGameCompletionRate(targetXuid, titleId, finalAchievements);
 
         res.json(finalAchievements);
     } catch (error) {
